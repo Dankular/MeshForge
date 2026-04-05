@@ -5,7 +5,8 @@ Pipeline per visible-face view:
   1. InsightFace buffalo_l  — detect faces, extract 5-pt landmarks & 512-d embeddings
   2. HyperSwap 1A 256       — swap reference identity (embedding) onto each view face
      (falls back to inswapper_128 if hyperswap not present)
-  3. GFPGAN v1.4            — restore + upscale face details
+  3. RealESRGAN x4plus      — upscale face bbox 4x, resize back (real detail,
+     identity-preserving). Falls back to GFPGAN v1.4 if weights not present.
 
 HyperSwap I/O:
     source  [1, 512]          — face embedding from recognition model
@@ -14,7 +15,7 @@ HyperSwap I/O:
     mask    [1, 1, 256, 256]  — alpha mask for seamless paste-back
 
 Usage (standalone):
-    python -m scripts.face_enhance \
+    python -m pipeline.face_enhance \
         --multiview  /tmp/user_tex4/result.png \
         --reference  /tmp/tex_input_768.png \
         --output     /tmp/user_tex4/result_enhanced.png \
@@ -98,10 +99,8 @@ class HyperSwapper:
         h, w = img_bgr.shape[:2]
         IM = cv2.invertAffineTransform(M)
 
-        # Warp swapped crop and mask back to original image space
         warped = cv2.warpAffine(crop_bgr, IM, (w, h),
                                 flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
-        # mask is [256,256] float32 [0,1]
         mask_img = (mask * 255).clip(0, 255).astype(np.uint8)
         mask_warped = cv2.warpAffine(mask_img, IM, (w, h), flags=cv2.INTER_LINEAR)
         mask_f = mask_warped.astype(np.float32)[:, :, np.newaxis] / 255.0
@@ -178,19 +177,44 @@ def load_swapper(ckpt_dir: str):
     )
 
 
-def load_gfpgan(ckpt_dir: str, upscale: int = 2):
+def load_realesrgan(model_path: str, scale: int = 4, half: bool = False):
+    """Load RealESRGAN x4plus — full float32 (half=False), no tiling (tile=0)."""
+    from basicsr.archs.rrdbnet_arch import RRDBNet
+    from realesrgan import RealESRGANer
+    model = RRDBNet(num_in_ch=3, num_out_ch=3, num_feat=64,
+                    num_block=23, num_grow_ch=32, scale=scale)
+    return RealESRGANer(
+        scale=scale, model_path=model_path, model=model,
+        tile=0, tile_pad=10, pre_pad=0, half=half,
+    )
+
+
+def load_gfpgan(ckpt_dir: str, upscale: int = 1):
     from gfpgan import GFPGANer
     model_path = os.path.join(ckpt_dir, "GFPGANv1.4.pth")
     if not os.path.exists(model_path):
         raise FileNotFoundError(f"GFPGANv1.4.pth not found in {ckpt_dir}")
-    restorer = GFPGANer(
-        model_path=model_path,
-        upscale=upscale,
-        arch="clean",
-        channel_multiplier=2,
-        bg_upsampler=None,
-    )
-    return restorer
+    return GFPGANer(model_path=model_path, upscale=upscale,
+                    arch="clean", channel_multiplier=2, bg_upsampler=None)
+
+
+def load_restorer(ckpt_dir: str):
+    """
+    Prefer RealESRGAN x4plus (full float32, no tiling, unsharp mask post-pass).
+    Falls back to GFPGAN v1.4 if RealESRGAN weights are absent.
+    Returns (restorer, 'realesrgan' | 'gfpgan').
+    """
+    realesr_path = os.path.join(ckpt_dir, "RealESRGAN_x4plus.pth")
+    if os.path.exists(realesr_path):
+        try:
+            r = load_realesrgan(realesr_path, scale=4, half=False)
+            print("[face_enhance] Restorer: RealESRGAN x4plus (float32, tile=0)")
+            return r, "realesrgan"
+        except Exception as e:
+            print(f"[face_enhance] RealESRGAN load failed ({e}), falling back to GFPGAN")
+    r = load_gfpgan(ckpt_dir, upscale=1)
+    print("[face_enhance] Restorer: GFPGAN v1.4 (fallback)")
+    return r, "gfpgan"
 
 
 # ── core enhancement ──────────────────────────────────────────────────────────
@@ -203,42 +227,64 @@ def get_reference_face(analyzer, ref_bgr: np.ndarray):
     return faces[0]
 
 
-def _gfpgan_face_only(frame_bgr, bbox, gfpgan_restorer, pad: float = 0.35) -> np.ndarray:
-    """Run GFPGAN on a padded face crop and paste the result back. Body is untouched."""
-    h, w = frame_bgr.shape[:2]
-    x1, y1, x2, y2 = bbox[:4].astype(int)
-    bw, bh = x2 - x1, y2 - y1
-    px, py = int(bw * pad), int(bh * pad)
-    cx1 = max(0, x1 - px);  cy1 = max(0, y1 - py)
-    cx2 = min(w, x2 + px);  cy2 = min(h, y2 + py)
-
-    crop = frame_bgr[cy1:cy2, cx1:cx2].copy()
-    try:
-        _, _, restored_crop = gfpgan_restorer.enhance(
-            crop,
-            has_aligned=False,
-            only_center_face=True,
-            paste_back=True,
-            weight=0.5,
-        )
-    except Exception as e:
-        import traceback as _tb
-        print(f"[enhance_view] GFPGAN failed on face crop: {e}\n{_tb.format_exc()}")
-        return frame_bgr
-
-    # Resize back to original crop size (GFPGAN may upscale)
-    crop_h, crop_w = cy2 - cy1, cx2 - cx1
-    if restored_crop.shape[:2] != (crop_h, crop_w):
-        restored_crop = cv2.resize(restored_crop, (crop_w, crop_h),
-                                   interpolation=cv2.INTER_LANCZOS4)
-
+def _enhance_face_bbox(frame_bgr: np.ndarray, faces, restorer, restorer_type: str,
+                       pad: float = 0.4) -> np.ndarray:
+    """
+    Crop each face bbox (+ padding), enhance with restorer, blend back.
+    RealESRGAN: upscale 4x → resize back → unsharp mask → feathered blend.
+    GFPGAN: restore in-place on crop → resize back → hard paste.
+    """
     result = frame_bgr.copy()
-    result[cy1:cy2, cx1:cx2] = restored_crop
+    h, w = frame_bgr.shape[:2]
+
+    for face in faces:
+        x1, y1, x2, y2 = face.bbox[:4].astype(int)
+        bw, bh = x2 - x1, y2 - y1
+        px, py = int(bw * pad), int(bh * pad)
+        cx1 = max(0, x1 - px);  cy1 = max(0, y1 - py)
+        cx2 = min(w, x2 + px);  cy2 = min(h, y2 + py)
+        crop = frame_bgr[cy1:cy2, cx1:cx2].copy()
+        if crop.size == 0:
+            continue
+        cw, ch = cx2 - cx1, cy2 - cy1
+
+        try:
+            if restorer_type == "realesrgan":
+                enhanced, _ = restorer.enhance(crop, outscale=4)
+                enhanced = cv2.resize(enhanced, (cw, ch), interpolation=cv2.INTER_LANCZOS4)
+                # Unsharp mask — strength 1.8
+                blur = cv2.GaussianBlur(enhanced, (0, 0), 2)
+                enhanced = cv2.addWeighted(enhanced, 1.8, blur, -0.8, 0)
+            else:
+                _, _, enhanced = restorer.enhance(
+                    crop, has_aligned=False, only_center_face=True,
+                    paste_back=True, weight=0.5)
+                if enhanced.shape[:2] != (ch, cw):
+                    enhanced = cv2.resize(enhanced, (cw, ch), interpolation=cv2.INTER_LANCZOS4)
+        except Exception as e:
+            import traceback as _tb
+            print(f"[enhance_view] {restorer_type} failed on face bbox: {e}\n{_tb.format_exc()}")
+            continue
+
+        # Feathered blend at edges
+        feather = max(3, int(min(cw, ch) * 0.08))
+        mask = np.ones((ch, cw), dtype=np.float32)
+        for f in range(feather):
+            a = (f + 1) / feather
+            mask[f, :] = a;  mask[-(f+1), :] = a
+            mask[:, f] = np.minimum(mask[:, f], a)
+            mask[:, -(f+1)] = np.minimum(mask[:, -(f+1)], a)
+        mask = mask[:, :, np.newaxis]
+        result[cy1:cy2, cx1:cx2] = (
+            result[cy1:cy2, cx1:cx2].astype(np.float32) * (1 - mask) +
+            enhanced.astype(np.float32) * mask
+        ).clip(0, 255).astype(np.uint8)
+
     return result
 
 
-def enhance_view(view_bgr, analyzer, swapper, gfpgan_restorer, source_face,
-                 gfpgan_upscale: int = 2) -> np.ndarray:
+def enhance_view(view_bgr, analyzer, swapper, restorer, restorer_type,
+                 source_face) -> np.ndarray:
     target_faces = analyzer.get(view_bgr)
     if not target_faces:
         return view_bgr
@@ -248,12 +294,10 @@ def enhance_view(view_bgr, analyzer, swapper, gfpgan_restorer, source_face,
         swapped = swapper.get(swapped, face, source_face, paste_back=True)
     print(f"[enhance_view] HyperSwap applied to {len(target_faces)} face(s)")
 
-    # Apply GFPGAN to each face bbox only — body is never touched
-    result = swapped
-    for i, face in enumerate(target_faces):
-        result = _gfpgan_face_only(result, face.bbox, gfpgan_restorer)
-        print(f"[enhance_view] GFPGAN restored face {i}")
-
+    # Re-detect in swapped image for accurate bboxes
+    swapped_faces = analyzer.get(swapped) or target_faces
+    result = _enhance_face_bbox(swapped, swapped_faces, restorer, restorer_type)
+    print(f"[enhance_view] {restorer_type} enhanced {len(swapped_faces)} face(s)")
     return result
 
 
@@ -263,13 +307,13 @@ def enhance_multiview(
     output_path: str,
     ckpt_dir: str,
     n_views: int = 6,
-    gfpgan_upscale: int = 2,
+    gfpgan_upscale: int = 1,
     face_views: tuple = (0, 1, 3, 4),
 ):
     print("[face_enhance] Loading models...")
     analyzer = load_face_analyzer()
-    swapper = load_swapper(ckpt_dir)
-    gfpgan_restorer = load_gfpgan(ckpt_dir, upscale=gfpgan_upscale)
+    swapper  = load_swapper(ckpt_dir)
+    restorer, restorer_type = load_restorer(ckpt_dir)
     print("[face_enhance] Models loaded.")
 
     ref_pil = Image.open(reference_path).convert("RGB")
@@ -284,8 +328,8 @@ def enhance_multiview(
     for i, view_pil in enumerate(views):
         if i in face_views:
             view_bgr = pil_to_bgr(view_pil)
-            result_bgr = enhance_view(view_bgr, analyzer, swapper, gfpgan_restorer,
-                                      source_face, gfpgan_upscale=gfpgan_upscale)
+            result_bgr = enhance_view(view_bgr, analyzer, swapper, restorer,
+                                      restorer_type, source_face)
             enhanced.append(bgr_to_pil(result_bgr))
             n_faces = len(analyzer.get(view_bgr))
             print(f"[face_enhance] View {i}: {n_faces} face(s) processed.")
@@ -306,7 +350,6 @@ if __name__ == "__main__":
     parser.add_argument("--output",      required=True)
     parser.add_argument("--checkpoints", default="./checkpoints")
     parser.add_argument("--n_views",     type=int, default=6)
-    parser.add_argument("--upscale",     type=int, default=2)
     args = parser.parse_args()
 
     enhance_multiview(
@@ -315,5 +358,4 @@ if __name__ == "__main__":
         output_path=args.output,
         ckpt_dir=args.checkpoints,
         n_views=args.n_views,
-        gfpgan_upscale=args.upscale,
     )

@@ -1,0 +1,16 @@
+name: triposg
+channels:
+  - defaults
+  - "nvidia/label/cuda-12.8.0"
+  - conda-forge
+
+dependencies:
+  - python=3.10
+  - pip
+
+  # NVCC for building CUDA extensions (nvdiffrast, diso)
+  - cuda-nvcc
+  - cuda-cudart-dev
+
+  - pip:
+    - -r requirements.txt
