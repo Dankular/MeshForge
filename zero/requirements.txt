@@ -1,0 +1,72 @@
+# HuggingFace ZeroGPU Space — torch/cuda pre-installed by HF runtime
+spaces
+
+# Git-pinned installs
+hmr2 @ git+https://github.com/shubham-goel/4D-Humans.git@efe18deff163b29dff87ddbd575fa29b716a356c
+clip @ git+https://github.com/openai/CLIP.git@d05afc436d78f1c48dc0dbf8e5980a9d471f35f6
+mvadapter @ git+https://github.com/huanngzh/MV-Adapter.git@4277e0018232bac82bb2c103caf0893cedb711be
+chumpy @ git+https://github.com/mattloper/chumpy.git@580566eafc9ac68b2614b64d6f7aaa84eebb70da
+skel @ git+https://github.com/MarilynKeller/SKEL.git@c32cf16581295bff19399379efe5b776d707cd95
+nvdiffrast @ git+https://github.com/NVlabs/nvdiffrast.git@253ac4fcea7de5f396371124af597e6cc957bfae
+diso @ git+https://github.com/SarahWeiii/diso.git@9792ad928ccb09bdec938779651ee03e395758a6
+detectron2 @ git+https://github.com/facebookresearch/detectron2.git@8a9d885b3d4dcf1bef015f0593b872ed8d32b4ab
+
+# Core ML
+accelerate
+diffusers>=0.37.0
+transformers>=5.0.0
+safetensors
+huggingface_hub
+peft
+einops
+timm
+xformers
+
+# 3D / Mesh
+trimesh
+open3d
+pymeshlab
+pygltflib
+pyrender
+moderngl
+moderngl-window
+
+# Body model
+smplx
+smplpytorch
+
+# Pose / Motion
+ultralytics
+pyquaternion
+kornia
+
+# Face enhancement
+insightface
+onnxruntime-gpu
+basicsr
+realesrgan
+gfpgan
+facexlib
+face-alignment
+
+# Surface enhancement
+stablenormal
+controlnet_aux
+
+# CV
+opencv-python-headless
+scikit-image
+albumentations
+
+# Scientific
+numpy
+scipy
+scikit-learn
+pandas
+
+# Utils
+easydict
+omegaconf
+yacs
+gdown
+pycocotools
