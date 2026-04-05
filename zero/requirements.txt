@@ -1,4 +1,9 @@
 # HuggingFace ZeroGPU Space — torch/cuda pre-installed by HF runtime
+# --no-build-isolation: required for chumpy (its setup.py does `import pip`,
+#   which breaks in pip>=21 isolated builds). Safe here because the HF base
+#   image has numpy/torch/setuptools pre-installed.
+--no-build-isolation
+
 spaces
 
 # Git-pinned installs
