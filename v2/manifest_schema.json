@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "MeshForge V2 Manifest",
+  "type": "object",
+  "required": ["workflow", "started_at", "finished_at", "status", "stages", "artifacts"],
+  "properties": {
+    "workflow": { "type": "string" },
+    "started_at": { "type": "string" },
+    "finished_at": { "type": "string" },
+    "status": { "type": "string", "enum": ["running", "completed", "failed"] },
+    "input": { "type": "object" },
+    "config": { "type": "object" },
+    "seed": { "type": "integer" },
+    "tex_seed": { "type": "integer" },
+    "stages": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "status"],
+        "properties": {
+          "name": { "type": "string" },
+          "status": { "type": "string" },
+          "detail": { "type": "string" }
+        }
+      }
+    },
+    "artifacts": { "type": "object" },
+    "error": { "type": "object" }
+  }
+}

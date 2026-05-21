@@ -1,0 +1,36 @@
+Multiple distributions found for package optimum. Picked distribution: optimum-quanto
+Loading TripoSG pipeline...
+Fetching 11 files:   0%|          | 0/11 [00:00<?, ?it/s]Fetching 11 files: 100%|##########| 11/11 [00:00<?, ?it/s]
+Loading pipeline components...:   0%|          | 0/5 [00:00<?, ?it/s]
+Loading weights:   0%|          | 0/439 [00:00<?, ?it/s][A
+Loading weights:  49%|####8     | 215/439 [00:00<00:00, 2130.72it/s][A
+Loading weights:  98%|#########7| 429/439 [00:00<00:00, 2006.40it/s][ALoading weights: 100%|##########| 439/439 [00:00<00:00, 2036.00it/s]
+Loading pipeline components...:  60%|######    | 3/5 [00:00<00:00,  5.14it/s]Loading pipeline components...:  80%|########  | 4/5 [00:01<00:00,  2.94it/s]Loading pipeline components...: 100%|##########| 5/5 [00:03<00:00,  1.22it/s]Loading pipeline components...: 100%|##########| 5/5 [00:03<00:00,  1.62it/s]
+C:\Users\sysadmin\AppData\Roaming\Python\Python312\site-packages\torch\nn\modules\module.py:1329: UserWarning: expandable_segments not supported on this platform (Triggered internally at C:\actions-runner\_work\pytorch\pytorch\pytorch\c10/cuda/CUDAAllocatorConfig.h:28.)
+  return t.to(
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+[transformers] `torch_dtype` is deprecated! Use `dtype` instead!
+C:\Users\sysadmin\AppData\Roaming\Python\Python312\site-packages\timm\models\layers\__init__.py:48: FutureWarning: Importing from timm.models.layers is deprecated, please import via timm.layers
+  warnings.warn(f"Importing from {__name__} is deprecated, please import via timm.layers", FutureWarning)
+C:\Users\sysadmin\AppData\Roaming\Python\Python312\site-packages\timm\models\registry.py:4: FutureWarning: Importing from timm.models.registry is deprecated, please import via timm.models
+  warnings.warn(f"Importing from {__name__} is deprecated, please import via timm.models", FutureWarning)
+RMBG-2.0 load failed (AttributeError: 'Config' object has no attribute 'model_type'...) - falling back to RMBG-1.4
+Fetching 20 files:   0%|          | 0/20 [00:00<?, ?it/s]Fetching 20 files: 100%|##########| 20/20 [00:00<00:00, 18452.72it/s]
+D:\Dev Proj\avatar\MeshForge\patches\TripoSG_image_process.py:118: UserWarning: Only one label was provided to `remove_small_objects`. Did you mean to use a boolean array?
+  cleaned_alpha = remove_small_objects(labeled_alpha, min_size=200)
+Loading weights from local directory
+RMBG-1.4 fallback loaded successfully.
+status=failed
+manifest=test_output\manifest.json
+Error:
+Traceback (most recent call last):
+  File "D:\Dev Proj\avatar\MeshForge\app.py", line 587, in generate_shape
+    mesh = run_triposg(
+           ^^^^^^^^^^^^
+  File "D:\Dev Proj\avatar\MeshForge\scripts\inference_triposg.py", line 62, in run_triposg
+    mesh = _call_pipeline(
+           ^^^^^^^^^^^^^^^
+  File "D:\Dev Proj\avatar\MeshForge\scripts\inference_triposg.py", line 46, in _call_pipeline
+    raise RuntimeError(
+RuntimeError: Unsupported TripoSG pipeline interface in scripts/inference_triposg.py
+

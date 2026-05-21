@@ -1,0 +1,40 @@
+Multiple distributions found for package optimum. Picked distribution: optimum-quanto
+Loading TripoSG pipeline...
+Fetching 11 files:   0%|          | 0/11 [00:00<?, ?it/s]Fetching 11 files: 100%|##########| 11/11 [00:00<00:00, 21752.64it/s]
+Loading pipeline components...:   0%|          | 0/5 [00:00<?, ?it/s]
+Loading weights:   0%|          | 0/439 [00:00<?, ?it/s][A
+Loading weights:  31%|###       | 135/439 [00:00<00:00, 1342.95it/s][A
+Loading weights:  63%|######3   | 277/439 [00:00<00:00, 1374.81it/s][A
+Loading weights:  95%|#########4| 415/439 [00:00<00:00, 1261.87it/s][ALoading weights: 100%|##########| 439/439 [00:00<00:00, 1325.70it/s]
+Loading pipeline components...:  20%|##        | 1/5 [00:00<00:03,  1.26it/s]Loading pipeline components...:  60%|######    | 3/5 [00:01<00:00,  2.28it/s]Loading pipeline components...:  80%|########  | 4/5 [00:04<00:01,  1.32s/it]Loading pipeline components...: 100%|##########| 5/5 [00:04<00:00,  1.13it/s]
+C:\Users\sysadmin\AppData\Roaming\Python\Python312\site-packages\torch\nn\modules\module.py:1329: UserWarning: expandable_segments not supported on this platform (Triggered internally at C:\actions-runner\_work\pytorch\pytorch\pytorch\c10/cuda/CUDAAllocatorConfig.h:28.)
+  return t.to(
+[transformers] `torch_dtype` is deprecated! Use `dtype` instead!
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+C:\Users\sysadmin\AppData\Roaming\Python\Python312\site-packages\timm\models\layers\__init__.py:48: FutureWarning: Importing from timm.models.layers is deprecated, please import via timm.layers
+  warnings.warn(f"Importing from {__name__} is deprecated, please import via timm.layers", FutureWarning)
+C:\Users\sysadmin\AppData\Roaming\Python\Python312\site-packages\timm\models\registry.py:4: FutureWarning: Importing from timm.models.registry is deprecated, please import via timm.models
+  warnings.warn(f"Importing from {__name__} is deprecated, please import via timm.models", FutureWarning)
+RMBG-2.0 load failed (AttributeError: 'Config' object has no attribute 'model_type'...) - falling back to RMBG-1.4
+Fetching 20 files:   0%|          | 0/20 [00:00<?, ?it/s]Fetching 20 files: 100%|##########| 20/20 [00:00<?, ?it/s]
+D:\Dev Proj\avatar\MeshForge\patches\TripoSG_image_process.py:118: UserWarning: Only one label was provided to `remove_small_objects`. Did you mean to use a boolean array?
+  cleaned_alpha = remove_small_objects(labeled_alpha, min_size=200)
+Loading weights from local directory
+RMBG-1.4 fallback loaded successfully.
+  0%|          | 0/30 [00:00<?, ?it/s]  3%|3         | 1/30 [00:00<00:24,  1.19it/s]  7%|6         | 2/30 [00:01<00:22,  1.25it/s] 10%|#         | 3/30 [00:02<00:21,  1.27it/s] 13%|#3        | 4/30 [00:03<00:19,  1.30it/s] 17%|#6        | 5/30 [00:03<00:18,  1.33it/s] 20%|##        | 6/30 [00:04<00:18,  1.31it/s] 23%|##3       | 7/30 [00:05<00:17,  1.33it/s] 27%|##6       | 8/30 [00:06<00:16,  1.31it/s] 30%|###       | 9/30 [00:06<00:16,  1.31it/s] 33%|###3      | 10/30 [00:07<00:15,  1.32it/s] 37%|###6      | 11/30 [00:08<00:14,  1.31it/s] 40%|####      | 12/30 [00:09<00:13,  1.31it/s] 43%|####3     | 13/30 [00:09<00:13,  1.31it/s] 47%|####6     | 14/30 [00:10<00:12,  1.29it/s] 50%|#####     | 15/30 [00:11<00:11,  1.30it/s] 53%|#####3    | 16/30 [00:12<00:10,  1.29it/s] 57%|#####6    | 17/30 [00:13<00:10,  1.28it/s] 60%|######    | 18/30 [00:13<00:09,  1.28it/s] 63%|######3   | 19/30 [00:14<00:08,  1.30it/s] 67%|######6   | 20/30 [00:15<00:07,  1.29it/s] 70%|#######   | 21/30 [00:16<00:06,  1.30it/s] 73%|#######3  | 22/30 [00:16<00:06,  1.31it/s] 77%|#######6  | 23/30 [00:17<00:05,  1.31it/s] 80%|########  | 24/30 [00:18<00:04,  1.30it/s] 83%|########3 | 25/30 [00:19<00:03,  1.30it/s] 87%|########6 | 26/30 [00:19<00:03,  1.31it/s] 90%|######### | 27/30 [00:20<00:02,  1.31it/s] 93%|#########3| 28/30 [00:21<00:01,  1.32it/s] 97%|#########6| 29/30 [00:22<00:00,  1.31it/s]100%|##########| 30/30 [00:23<00:00,  1.30it/s]100%|##########| 30/30 [00:23<00:00,  1.30it/s]
+Pipelines loaded with `dtype=torch.float16` cannot run with `cpu` device. It is not recommended to move them to `cpu` as running them will fail. Please make sure to use an accelerator to run the pipeline in inference, due to the lack of support for`float16` operations on this device in PyTorch. Please, remove the `torch_dtype=torch.float16` argument, or use another device for inference.
+Pipelines loaded with `dtype=torch.float16` cannot run with `cpu` device. It is not recommended to move them to `cpu` as running them will fail. Please make sure to use an accelerator to run the pipeline in inference, due to the lack of support for`float16` operations on this device in PyTorch. Please, remove the `torch_dtype=torch.float16` argument, or use another device for inference.
+Pipelines loaded with `dtype=torch.float16` cannot run with `cpu` device. It is not recommended to move them to `cpu` as running them will fail. Please make sure to use an accelerator to run the pipeline in inference, due to the lack of support for`float16` operations on this device in PyTorch. Please, remove the `torch_dtype=torch.float16` argument, or use another device for inference.
+final grids shape =  torch.Size([505, 505, 505])
+status=failed
+manifest=test_output_v3\manifest.json
+Texture failed:
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "D:\Dev Proj\avatar\MeshForge\external\MV-Adapter\scripts\texture_i2tex.py", line 9, in <module>
+    from mvadapter.pipelines.pipeline_texture import ModProcessConfig, TexturePipeline
+  File "D:\Dev Proj\avatar\MeshForge\external\MV-Adapter\mvadapter\pipelines\pipeline_texture.py", line 10, in <module>
+    from spandrel import ModelLoader
+ModuleNotFoundError: No module named 'spandrel'
+
