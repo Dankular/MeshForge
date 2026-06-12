@@ -94,6 +94,10 @@ def _fuse_head(body: Mesh, head_obj: str, state: dict) -> Mesh:
         state.pop("head_verts", None)
     state.pop("head_colors_uv", None)
     state.pop("head_faces", None)
+    # Persist the pre-unwrap mesh: it is the only valid texture-stage input
+    # (and its content keys the views cache), and it makes mid-bake crash
+    # snapshots resumable.
+    state["body_fused"] = fused
     return fused
 
 
@@ -452,6 +456,46 @@ class AvatarPipeline:
             )
         return textures, textured_body
 
+    def _refuse_head_from_cache(
+        self,
+        state: dict,
+        processed: np.ndarray,
+        output_dir: str,
+        fallback_body: Mesh | None,
+    ) -> Mesh:
+        """Rebuild the pre-unwrap fused mesh from the snapshot's cached parts.
+
+        Fuses onto body_prefusion (never onto an already-fused mesh); the
+        PSHuman head artifact hits its content cache unless its key is
+        genuinely stale. *fallback_body* covers pre-head-detail snapshots
+        where the stored body IS the pre-fusion body.
+        """
+        if state.get("head_detail") and state.get("body_prefusion") is None:
+            raise RuntimeError(
+                "Snapshot has a fused body but no pre-fusion body to "
+                "upgrade from; rerun without --snapshot"
+            )
+        base = state.get("body_prefusion")
+        if base is None:
+            base = fallback_body
+        if base is None:
+            raise RuntimeError(
+                "Snapshot has no pre-fusion body to fuse onto; rerun "
+                "without --snapshot"
+            )
+        base, _ = _ensure_outward_winding(base)
+        # The cached segmentation may predate the Goliath label fix;
+        # recompute it for the head crop.
+        seg = self.parser.parse(processed)
+        state["seg"] = seg
+        head_obj = self._generate_head_detail(
+            processed, seg, state,
+            work_dir=str(Path(output_dir) / "pshuman"),
+        )
+        fused = _fuse_head(base, head_obj, state)
+        state["head_detail"] = True
+        return fused
+
     def _head_detail_is_stale(self, state: dict) -> bool:
         """True when the head must be (re)generated: never fused, artifact
         key mismatch (inputs or HEAD_DETAIL_VERSION changed), or the cached
@@ -535,39 +579,31 @@ class AvatarPipeline:
                 state["processed"], state["seg"], state["pose"], state["depth"],
                 state["hi_nrm"], state["pointmap"],
             )
-            # A snapshot persisted mid-bake (crash recovery) has no fused
-            # body yet — only body_prefusion. Re-fuse below; the PSHuman
-            # head artifact is cached, so no regeneration happens.
+            # Two meshes live in the snapshot: "body_fused" is the pre-unwrap
+            # fused mesh (the ONLY valid input for the texture stage — its
+            # content also keys the views cache), and "body" is the
+            # UVAtlas-unwrapped textured mesh used for rig/export. Feeding
+            # "body" back through the texture stage double-unwraps a
+            # seam-split mesh, which UVAtlas rejects as non-manifold.
             body = state.get("body")
             if body is not None:
                 body, flipped = _ensure_outward_winding(body)
                 if flipped:
                     print("[snapshot] flipped cached mesh winding to outward orientation")
                     state["body"] = body
+            body_fused = state.get("body_fused")
 
             rebuild_reason = None
-            if body is None or self._head_detail_is_stale(state):
+            if self._head_detail_is_stale(state) or (
+                body is None and body_fused is None
+            ):
                 # The head artifact is missing or its content key is stale
                 # (new inputs or a HEAD_DETAIL_VERSION bump). Re-fuse from
                 # the pre-fusion body — never onto an already-fused mesh.
                 print("[snapshot] (re)generating PSHuman head detail")
-                if state.get("head_detail") and state.get("body_prefusion") is None:
-                    raise RuntimeError(
-                        "Snapshot has a fused body but no pre-fusion body to "
-                        "upgrade from; rerun without --snapshot"
-                    )
-                if state.get("body_prefusion") is not None:
-                    body, _ = _ensure_outward_winding(state["body_prefusion"])
-                # The cached segmentation may predate the Goliath label fix;
-                # recompute it for the head crop.
-                seg = self.parser.parse(processed)
-                state["seg"] = seg
-                head_obj = self._generate_head_detail(
-                    processed, seg, state,
-                    work_dir=str(Path(output_dir) / "pshuman"),
+                body_fused = self._refuse_head_from_cache(
+                    state, processed, output_dir, fallback_body=body
                 )
-                body = _fuse_head(body, head_obj, state)
-                state["head_detail"] = True
                 rebuild_reason = "head detail added to mesh"
 
             if rebuild_reason is None:
@@ -579,8 +615,21 @@ class AvatarPipeline:
                 textures = state["textures"]
             else:
                 print(f"[snapshot] rebaking textures: {rebuild_reason}")
+                if body_fused is None:
+                    if state.get("body_prefusion") is not None:
+                        # Snapshot predates body_fused: rebuild the pre-unwrap
+                        # mesh from cached parts (PSHuman head hits its cache).
+                        print("[snapshot] rebuilding pre-unwrap fused mesh")
+                        body_fused = self._refuse_head_from_cache(
+                            state, processed, output_dir, fallback_body=None
+                        )
+                    else:
+                        # Legacy snapshot with only the stored body: bake from
+                        # it directly (pre-TexturePipeline snapshots stored
+                        # the pre-unwrap mesh here).
+                        body_fused = body
                 textures, body = self._bake_textures(
-                    body, processed, hi_nrm, state,
+                    body_fused, processed, hi_nrm, state,
                     persist=lambda: self._write_snapshot(snap_path, state),
                     work_dir=str(Path(output_dir) / "texture"),
                 )
@@ -629,11 +678,8 @@ class AvatarPipeline:
             # 5. Pre-rig head fusion (raw geometry; the UV unwrap happens
             # inside the reference TexturePipeline in the next stage)
             print("[5/8] Head fusion ...")
-            body = _fuse_head(body, head_obj, state)
+            body = _fuse_head(body, head_obj, state)  # also sets body_fused
             state["head_detail"] = True
-            # Persist the fused body now: mid-bake crash snapshots must be
-            # resumable, and _bake_textures only sets state["body"] at the end.
-            state["body"] = body
 
             # 6. Texture: MV-Adapter views + reference TexturePipeline
             # (UVAtlas unwrap, view upscale, view inpaint) — Space-exact.
