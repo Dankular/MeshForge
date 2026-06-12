@@ -30,6 +30,11 @@ def test_tpose_keypoints_geometry():
     assert pts[R_WRI, 0] < pts[R_SHO, 0] < pts[NECK, 0]
     assert pts[L_WRI, 0] > pts[L_SHO, 0] > pts[NECK, 0]
 
+    # Edge margin: the model paints hands beyond the wrists, so wrists must
+    # stay >=20% from the frame edge or fingertips get clipped.
+    assert pts[R_WRI, 0] >= 0.20 * width
+    assert pts[L_WRI, 0] <= 0.80 * width
+
     # Legs descend hip -> knee -> ankle on both sides.
     for hip, knee, ankle in ((R_HIP, R_KNE, R_ANK), (L_HIP, L_KNE, L_ANK)):
         assert pts[hip, 1] < pts[knee, 1] < pts[ankle, 1]

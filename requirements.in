@@ -1,0 +1,49 @@
+# MeshForge direct dependencies (curated 2026-06-12).
+# requirements.txt pins the exact verified-working versions; this file is the
+# human-readable source of truth for WHAT we depend on and WHY.
+#
+# Not listed here: the vendored reference repos (external/TripoSG, PSHuman,
+# MV-Adapter, SkinTokens, IP-Adapter) — they are git clones imported
+# in-process, never pip-installed. Imports like `ip_adapter`, `triposg`,
+# `mvdiffusion` resolve from external/, NOT from the same-named PyPI packages.
+
+# ── torch stack — versions are coupled, move together (see requirements.txt
+#    header for wheel sources; pytorch3d + nvdiffrast are source-built) ──
+torch
+torchvision
+xformers
+kaolin
+torch-scatter
+
+# ── avatar_pipeline direct imports ──
+accelerate
+diffusers
+huggingface-hub
+insightface          # FaceID embedding + aligned face crop (--from-candid)
+mmgp                 # shared GPU offload domain (runtime/memory.py)
+numpy
+omegaconf
+opencv-python
+pillow
+pymeshlab
+rembg
+scipy
+trimesh
+typer
+
+# ── required by the vendored repos at runtime (run in-process) ──
+basicsr              # RealESRGAN dependency (MV-Adapter view upscale)
+einops
+embreex              # trimesh Embree ray backend (AO bake)
+onnxruntime-gpu      # rembg session + insightface CUDA provider
+open3d               # TexturePipeline UVAtlas unwrap
+peft
+realesrgan
+safetensors
+scikit-image
+smplx                # PSHuman SMPL-X carve (PIXIE)
+transformers
+xatlas
+
+# ── dev ──
+pytest

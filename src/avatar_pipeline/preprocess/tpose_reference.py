@@ -50,11 +50,11 @@ _TPOSE_KEYPOINTS_NORM: tuple[tuple[float, float], ...] = (
     (0.500, 0.130),  # 0  nose
     (0.500, 0.230),  # 1  neck
     (0.420, 0.230),  # 2  R shoulder
-    (0.300, 0.230),  # 3  R elbow
-    (0.180, 0.230),  # 4  R wrist
-    (0.580, 0.230),  # 5  L shoulder
-    (0.700, 0.230),  # 6  L elbow
-    (0.820, 0.230),  # 7  L wrist
+    (0.320, 0.230),  # 3  R elbow
+    (0.220, 0.230),  # 4  R wrist — keep >=20% edge margin: the model
+    (0.580, 0.230),  # 5  L shoulder      paints hands beyond the wrists,
+    (0.680, 0.230),  # 6  L elbow         and clipped fingertips break the
+    (0.780, 0.230),  # 7  L wrist         downstream rembg silhouette
     (0.455, 0.510),  # 8  R hip
     (0.448, 0.700),  # 9  R knee
     (0.442, 0.880),  # 10 R ankle
@@ -172,21 +172,63 @@ class TPoseReferenceGenerator:
         straight through, aligned crop included); the crop is therefore kept
         in BGR exactly as the official demo passes it to generate().
         Fails loudly when no face is detected — no fallback identity.
+
+        Mirrors FaceAnalysis.get(), but sweeps the SCRFD detect size and
+        image rotation:
+          - get() freezes the 640 canvas, and faces that fill the frame
+            (tight face crops) exceed its anchor scales after resize — they
+            only detect at smaller input sizes. detect(input_size=...) is
+            the upstream-supported per-call override.
+          - candid photos are frequently rotated 90/180/270 deg (EXIF
+            stripped); SCRFD does not detect sideways faces, so each
+            rotation is tried and the upright orientation is used for the
+            landmarks, embedding, and aligned crop.
         """
+        from insightface.app.common import Face
         from insightface.utils import face_align
 
         bgr = np.ascontiguousarray(image_rgb[:, :, ::-1])
-        faces = self._get_face_app().get(bgr)
-        if not faces:
+        app = self._get_face_app()
+        bboxes = kpss = None
+        found = False
+        for quarter_turns in (0, 1, 2, 3):
+            candidate = np.ascontiguousarray(np.rot90(bgr, k=quarter_turns))
+            for det_size in (640, 320, 160):
+                bboxes, kpss = app.det_model.detect(
+                    candidate,
+                    input_size=(det_size, det_size),
+                    max_num=0,
+                    metric="default",
+                )
+                if bboxes.shape[0]:
+                    found = True
+                    break
+            if found:
+                if quarter_turns:
+                    print(
+                        f"  face found after rotating the input "
+                        f"{quarter_turns * 90} deg counter-clockwise"
+                    )
+                bgr = candidate
+                break
+        if not found:
             raise RuntimeError(
-                "insightface found no face in the candid input; cannot build "
-                "a T-pose reference without a face identity"
+                "insightface found no face in the candid input (tried all "
+                "four rotations); cannot build a T-pose reference without "
+                "a face identity"
             )
         # Candid photos may contain bystanders: take the largest face.
-        face = max(
-            faces,
-            key=lambda f: (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1]),
+        areas = (bboxes[:, 2] - bboxes[:, 0]) * (bboxes[:, 3] - bboxes[:, 1])
+        i = int(np.argmax(areas))
+        face = Face(
+            bbox=bboxes[i, 0:4],
+            kps=kpss[i] if kpss is not None else None,
+            det_score=bboxes[i, 4],
         )
+        for taskname, model in app.models.items():
+            if taskname == "detection":
+                continue
+            model.get(bgr, face)
         faceid_embeds = torch.from_numpy(face.normed_embedding).unsqueeze(0)
         face_image = face_align.norm_crop(bgr, landmark=face.kps, image_size=224)
         return faceid_embeds, face_image

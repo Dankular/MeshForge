@@ -18,6 +18,10 @@ hard rules (no stubs, no hash-derived outputs, no silent fallbacks).
 7. **SkinTokens** — skeleton + skinning weights
 8. **GLB export** — PBR material, sidecar PNGs, meta.json
 
+The stage list above is what runs today. `CODEX.md` carries the revised
+target architecture (PSHuman/SMPL-X-scaffolded body base, TripoSG demoted
+to supplemental shells) and the migration order.
+
 ## Run
 
 ```powershell
