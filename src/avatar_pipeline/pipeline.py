@@ -74,11 +74,6 @@ class PipelineConfig:
     # AND head is the default (CODEX steps 3-4; TripoSG is retired to the
     # legacy --triposg-body arm and its weights are not even loaded here).
     full_pshuman: bool = True
-    # Perspective-neutral FaceID portrait (written by --from-candid): when
-    # set, PSHuman carves a high-fidelity head from it (multiview diffusion
-    # supplies the depth a single warped candid view cannot) and the result
-    # is transplanted onto the full-figure body.
-    face_portrait: str | None = None
 
 
 # ── UV unwrap ─────────────────────────────────────────────────────────────────
@@ -576,12 +571,6 @@ class AvatarPipeline:
             work_dir=str(Path(output_dir) / "pshuman_full"),
         )
         portrait = state.get("face_portrait")
-        if portrait is None and self.config.face_portrait:
-            portrait = np.array(
-                Image.open(self.config.face_portrait).convert("RGB"),
-                dtype=np.uint8,
-            )
-            state["face_portrait"] = portrait
         if portrait is not None:
             print("  portrait-head transplant ...")
             head_obj = self._generate_portrait_head(
@@ -698,7 +687,16 @@ class AvatarPipeline:
         finally:
             temp_path.unlink(missing_ok=True)
 
-    def run(self, input_image: str, output_dir: str, snapshot: str | None = None) -> Path:
+    def run(
+        self,
+        input_image: str,
+        output_dir: str,
+        snapshot: str | None = None,
+        face_portrait: str | None = None,
+    ) -> Path:
+        """face_portrait: per-run path to the perspective-neutral FaceID
+        portrait (candid flow); PSHuman carves the head from it. Per-run,
+        not config: one pipeline instance serves a whole batch queue."""
         self.validate_memory_profile()
         # Snapshot = pickled (processed, seg, pose, depth, hi_nrm, pointmap, body,
         # textures) from steps 1-5. TripoSG generation + the MV-Adapter diffusion
@@ -706,11 +704,19 @@ class AvatarPipeline:
         # input-image-deterministic given a fixed seed — caching their output lets
         # later-stage work (PSHuman, SkinTokens) iterate without rerunning them.
         snap_path = Path(snapshot) if snapshot else None
+
+        def _inject_portrait(state: dict) -> None:
+            if face_portrait and state.get("face_portrait") is None:
+                state["face_portrait"] = np.array(
+                    Image.open(face_portrait).convert("RGB"), dtype=np.uint8
+                )
+
         if snap_path is not None and snap_path.exists():
             import pickle
             print(f"[snapshot] loading cached pre-rig state from {snap_path}")
             with open(snap_path, "rb") as f:
                 state = pickle.load(f)
+            _inject_portrait(state)
             processed, seg, pose, depth, hi_nrm, pointmap = (
                 state["processed"], state["seg"], state["pose"], state["depth"],
                 state["hi_nrm"], state["pointmap"],
@@ -808,6 +814,7 @@ class AvatarPipeline:
                 "hi_nrm": hi_nrm, "pointmap": pointmap,
                 _TEXTURE_SCHEMA_KEY: TEXTURE_SCHEMA_VERSION,
             }
+            _inject_portrait(state)
 
             if self.config.full_pshuman:
                 # 3-5. PSHuman full-figure reconstruction (+ portrait-head

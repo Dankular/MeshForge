@@ -14,7 +14,7 @@ def test_cli_run_command_with_workspace_image(tmp_path):
 
     out_dir = tmp_path / "cli-out"
     runner = CliRunner()
-    result = runner.invoke(app, [str(workspace_image), str(out_dir)])
+    result = runner.invoke(app, ["run", str(workspace_image), str(out_dir)])
 
     assert result.exit_code == 0
     output_file = out_dir / "avatar.glb"

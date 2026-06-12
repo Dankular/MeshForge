@@ -76,11 +76,38 @@ def test_render_tpose_skeleton():
 def test_cli_exposes_from_candid_flag():
     from avatar_pipeline.main import app
 
-    result = CliRunner().invoke(app, ["--help"])
+    result = CliRunner().invoke(app, ["run", "--help"])
     assert result.exit_code == 0
     assert "--from-candid" in result.stdout
     assert "--full-pshuman" in result.stdout
     assert "--no-clothes" in result.stdout
+
+    result = CliRunner().invoke(app, ["--help"])
+    assert "batch" in result.stdout
+
+
+def test_parse_jobs():
+    import pytest
+
+    from avatar_pipeline.main import parse_jobs
+
+    jobs = parse_jobs(
+        "# comment\n"
+        "run_a | C:\\imgs\\a.png\n"
+        "\n"
+        "run_b | C:\\imgs\\b (1).png | no-clothes\n"
+    )
+    assert [j.name for j in jobs] == ["run_a", "run_b"]
+    assert jobs[0].no_clothes is False
+    assert jobs[1].no_clothes is True
+    assert jobs[1].image == "C:\\imgs\\b (1).png"
+
+    with pytest.raises(ValueError, match="unknown flags"):
+        parse_jobs("run_a | x.png | nude")
+    with pytest.raises(ValueError, match="expected"):
+        parse_jobs("just-a-name\n")
+    with pytest.raises(ValueError, match="no jobs"):
+        parse_jobs("# nothing\n")
 
 
 def test_prompt_composition_subject_and_clothing():
