@@ -15,6 +15,29 @@ import trimesh
 from avatar_pipeline.models.mesh import Mesh
 
 
+def uvatlas_defects(verts: np.ndarray, faces: np.ndarray) -> dict[str, int]:
+    """Defect counts that make open3d's UVAtlas unwrap reject a mesh.
+
+    UVAtlas requires full manifoldness: edge-manifold (<=2 faces per edge),
+    vertex-manifold (no bowties), and no duplicate faces. Checked with
+    open3d's own predicates — the exact ones compute_uvatlas enforces.
+    """
+    import open3d as o3d
+
+    m = o3d.geometry.TriangleMesh(
+        o3d.utility.Vector3dVector(np.asarray(verts, dtype=np.float64)),
+        o3d.utility.Vector3iVector(np.asarray(faces, dtype=np.int32)),
+    )
+    tris_sorted = np.sort(np.asarray(faces), axis=1)
+    return {
+        "nm_edges": len(
+            np.asarray(m.get_non_manifold_edges(allow_boundary_edges=True))
+        ),
+        "nm_verts": len(np.asarray(m.get_non_manifold_vertices())),
+        "dup_faces": len(tris_sorted) - len(np.unique(tris_sorted, axis=0)),
+    }
+
+
 def fuse_head_prerig(
     body: Mesh,
     head_mesh_path: str,
@@ -65,14 +88,25 @@ def fuse_head_prerig(
         ms.add_mesh(pymeshlab.Mesh(**mesh_kwargs))
         ms.meshing_merge_close_vertices()
         ms.meshing_decimation_quadric_edge_collapse(targetfacenum=head_target_faces)
-        # Quadric collapse leaves non-manifold edges/vertices behind, and the
-        # reference TexturePipeline's UVAtlas unwrap hard-rejects them
-        # ("Non-manifold mesh"). Repair preserves vertex positions (edge
-        # repair drops faces, vertex repair splits verts), so the
-        # position-exact head-color matching downstream is unaffected.
-        ms.meshing_repair_non_manifold_edges()
-        ms.meshing_repair_non_manifold_vertices()
-        ms.meshing_remove_unreferenced_vertices()
+        # Quadric collapse leaves non-manifold edges, bowtie vertices, and
+        # duplicate faces behind, and the reference TexturePipeline's UVAtlas
+        # unwrap hard-rejects all of them ("Non-manifold mesh"). Repair
+        # preserves vertex positions (edge/dup repair drops faces, vertex
+        # repair splits verts in place), so the position-exact head-color
+        # matching downstream is unaffected. One pass is not always enough
+        # (duplicate faces mask bowties from the vertex repair), so iterate
+        # against the same defect predicates UVAtlas enforces.
+        for _ in range(3):
+            ms.meshing_repair_non_manifold_edges()
+            ms.meshing_remove_duplicate_faces()
+            ms.meshing_remove_null_faces()
+            ms.meshing_repair_non_manifold_vertices()
+            ms.meshing_remove_unreferenced_vertices()
+            cur = ms.current_mesh()
+            defects = uvatlas_defects(cur.vertex_matrix(), cur.face_matrix())
+            if not any(defects.values()):
+                break
+            print(f"[head_fusion] head repair pass left {defects}; retrying")
         dec = ms.current_mesh()
         if head_colors is not None:
             head_colors = dec.vertex_color_matrix()[:, :3].astype(np.float32)
@@ -138,16 +172,11 @@ def fuse_head_prerig(
 
     # The reference TexturePipeline runs UVAtlas with preprocess=False (to
     # keep vertex positions exact for head-color matching) and UVAtlas
-    # hard-rejects non-manifold meshes — catch it here, where the cause is
+    # hard-rejects any non-manifoldness — catch it here, where the cause is
     # attributable, not 20 minutes later inside the bake.
-    edges = trimesh.Trimesh(
-        vertices=combined_verts, faces=combined_faces, process=False
-    ).edges_sorted
-    _, edge_counts = np.unique(edges, axis=0, return_counts=True)
-    nonmanifold = int((edge_counts > 2).sum())
-    if nonmanifold:
+    defects = uvatlas_defects(combined_verts, combined_faces)
+    if any(defects.values()):
         raise RuntimeError(
-            f"[head_fusion] fused mesh has {nonmanifold} non-manifold edges; "
-            "the UVAtlas unwrap will reject it"
+            f"[head_fusion] fused mesh is not UVAtlas-clean: {defects}"
         )
     return fused, head_colors, len(verts)
