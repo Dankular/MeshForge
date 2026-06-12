@@ -38,6 +38,42 @@ def uvatlas_defects(verts: np.ndarray, faces: np.ndarray) -> dict[str, int]:
     }
 
 
+def _neck_line(verts: np.ndarray, n_bins: int = 100) -> float | None:
+    """y of the neck: the top of the wingspan jump in the width profile.
+
+    A fixed anatomical head fraction fails on TripoSG bodies with off
+    proportions — this class of body has a vestigial head stub (top ~3%,
+    width ~0.3) with the T-pose wingspan (width ~1.7) starting right below
+    it, so a 13% cut centers the transplanted head at the chest and sinks
+    it into the torso. Image-space pose keypoints fail for the same reason:
+    the mesh does not share the image's proportions. The mesh's own width
+    profile is unambiguous in a T-pose: scanning down, the horizontal
+    extent multiplies at the shoulder line. Returns the mesh y of the last
+    narrow bin, or None when no clear jump exists.
+    """
+    y = verts[:, 1]
+    y_min, y_max = float(y.min()), float(y.max())
+    height = y_max - y_min
+    if height <= 0:
+        return None
+    bins = np.clip(((y_max - y) / height * n_bins).astype(int), 0, n_bins - 1)
+    x_min = np.full(n_bins, np.inf)
+    x_max = np.full(n_bins, -np.inf)
+    np.minimum.at(x_min, bins, verts[:, 0])
+    np.maximum.at(x_max, bins, verts[:, 0])
+    width = np.where(np.isfinite(x_min), x_max - x_min, 0.0)
+
+    peak = float(width.max())
+    for i in range(min(30, n_bins - 1)):  # neck must be in the top 30%
+        if (
+            width[i] > 0
+            and width[i + 1] > 1.8 * width[i]
+            and width[i] < 0.5 * peak
+        ):
+            return y_max - (i + 1) / n_bins * height
+    return None
+
+
 def fuse_head_prerig(
     body: Mesh,
     head_mesh_path: str,
@@ -126,12 +162,28 @@ def fuse_head_prerig(
     verts = np.array(body_tm.vertices, dtype=np.float64)
     y = verts[:, 1]
     y_min, y_max = float(y.min()), float(y.max())
-    y_thresh = y_max - (y_max - y_min) * head_fraction
-    head_mask = y >= y_thresh
+    height = y_max - y_min
+
+    neck_y = _neck_line(verts)
+    if neck_y is not None:
+        # Anatomical placement: the body's own head is whatever sits above
+        # the neck line (possibly a vestigial stub far smaller than a real
+        # head — scaling the PSHuman head into that pocket gives a pinhead
+        # sunk behind the collar). Scale the head to ~1/7.5 of standing
+        # height instead and seat it on the neck, regardless of how little
+        # head geometry the body grew.
+        print(f"[head_fusion] neck line at y={neck_y:.3f} (width-profile jump)")
+        head_mask = y >= neck_y
+    else:
+        print(
+            f"[head_fusion] no neck jump found; fixed "
+            f"{head_fraction:.0%} head fraction"
+        )
+        head_mask = y >= y_max - height * head_fraction
     if head_mask.sum() < 3:
         raise RuntimeError("No head vertices found on body mesh")
     print(
-        f"[head_fusion] body head verts (top {head_fraction*100:.0f}% of Y): "
+        f"[head_fusion] body head/stub verts: "
         f"{head_mask.sum():,} / {len(verts):,}"
     )
 
@@ -139,17 +191,29 @@ def fuse_head_prerig(
     normals = np.asarray(body_tm.vertex_normals, dtype=np.float64)
     verts[head_mask] -= normals[head_mask] * retract_amount
 
-    # Align PSHuman head to the body head bounding box. Both meshes are
-    # upright (y-up), so match the uniform scale on the VERTICAL extent —
-    # head height to head-region height — and center the boxes.
-    tgt = verts[head_mask]
-    tgt_min, tgt_max = tgt.min(axis=0), tgt.max(axis=0)
-    tgt_ctr = (tgt_min + tgt_max) * 0.5
     src_min = head.vertices.min(axis=0)
     src_max = head.vertices.max(axis=0)
     src_ctr = (src_min + src_max) * 0.5
-    scale = float(tgt_max[1] - tgt_min[1]) / float(src_max[1] - src_min[1] + 1e-9)
-    head_verts = (np.asarray(head.vertices, dtype=np.float64) - src_ctr) * scale + tgt_ctr
+    src_h = float(src_max[1] - src_min[1] + 1e-9)
+    tgt = verts[head_mask]
+    tgt_min, tgt_max = tgt.min(axis=0), tgt.max(axis=0)
+    tgt_ctr = (tgt_min + tgt_max) * 0.5
+
+    if neck_y is not None:
+        # Anatomical head height, seated on the neck line with a 10% sink
+        # for weld overlap; centered horizontally on the stub.
+        dst_h = 0.13 * height
+        scale = dst_h / src_h
+        head_verts = (np.asarray(head.vertices, dtype=np.float64) - src_ctr) * scale
+        head_verts[:, 0] += tgt_ctr[0]
+        head_verts[:, 2] += tgt_ctr[2]
+        head_verts[:, 1] += (neck_y - 0.10 * dst_h) - head_verts[:, 1].min()
+    else:
+        # Legacy: match the head-region bounding box vertically and center.
+        scale = float(tgt_max[1] - tgt_min[1]) / src_h
+        head_verts = (
+            np.asarray(head.vertices, dtype=np.float64) - src_ctr
+        ) * scale + tgt_ctr
     print(f"[head_fusion] aligned head: scale={scale:.4f}")
 
     combined_verts = np.vstack([verts, head_verts]).astype(np.float32)
