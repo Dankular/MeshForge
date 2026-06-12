@@ -214,28 +214,24 @@ class TPoseReferenceGenerator:
         "blurry, tilted head, profile, side view, sunglasses, hat, cropped"
     )
     # {subject} is filled from the identity phase (insightface genderage —
-    # "a woman" / "a man", falling back to "a person"); {clothing} switches
-    # with no_clothes for anatomy-validation generations where loose
-    # clothing would hide the body shape from the proportion validators
-    # and the PSHuman carve.
+    # "a woman" / "a man", falling back to "a person"). With no_clothes the
+    # {clothing} fragment is simply omitted and every garment term moves to
+    # the negative — the prompt is otherwise untouched.
     prompt_template = (
         "full body photo of {subject} standing upright in a T-pose, arms "
         "held straight out horizontally to the sides, fingers extended, "
         "legs straight, feet slightly apart, facing the camera, neutral "
-        "expression, {clothing}, plain light gray studio "
+        "expression, {clothing}plain light gray studio "
         "background, even soft lighting, sharp focus, whole body in frame"
     )
-    clothing_default = "casual fitted clothing"
-    clothing_none = (
-        "wearing only plain fitted gray athletic underwear, bare arms and "
-        "bare legs, barefoot"
-    )
+    clothing_default = "casual fitted clothing, "
     negative_prompt_base = (
         "monochrome, lowres, bad anatomy, worst quality, low quality, blurry, "
         "cropped, out of frame, arms down, arms bent, hands on hips, sitting"
     )
     negative_no_clothes = (
-        ", baggy clothing, loose clothing, dress, skirt, coat, trousers"
+        ", underwear, briefs, bra, panties, clothing, garment, fabric, "
+        "cloth, dress, skirt, shorts, shirt, trousers, shoes"
     )
 
     def __init__(
@@ -258,8 +254,7 @@ class TPoseReferenceGenerator:
     def prompt(self) -> str:
         return self.prompt_template.format(
             subject=self.subject,
-            clothing=self.clothing_none if self.no_clothes
-            else self.clothing_default,
+            clothing="" if self.no_clothes else self.clothing_default,
         )
 
     @property

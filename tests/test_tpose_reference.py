@@ -96,8 +96,13 @@ def test_prompt_composition_subject_and_clothing():
     assert "a woman" in gen.prompt
     assert "a woman" in gen.portrait_prompt
 
+    # no_clothes: the SAME prompt minus the clothing fragment — nothing
+    # added; garment terms are negated instead.
     bare = TPoseReferenceGenerator(no_clothes=True)
     bare.subject = "a man"
-    assert "athletic underwear" in bare.prompt
-    assert "loose clothing" in bare.negative_prompt
+    clothed = TPoseReferenceGenerator()
+    clothed.subject = "a man"
+    assert bare.prompt == clothed.prompt.replace("casual fitted clothing, ", "")
+    assert "underwear" in bare.negative_prompt
+    assert "fabric" in bare.negative_prompt
     assert "casual fitted clothing" not in bare.prompt
