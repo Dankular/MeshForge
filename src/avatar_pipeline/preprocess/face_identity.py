@@ -78,13 +78,45 @@ class FaceIdentityExtractor:
                 return face, candidate
         return None
 
-    def embed(self, image_rgb: np.ndarray) -> np.ndarray | None:
-        """Normalized FaceID embedding of the largest face, or None."""
+    def embed(
+        self, image_rgb: np.ndarray, min_face_px: int = 160
+    ) -> np.ndarray | None:
+        """Normalized FaceID embedding of the largest face, or None.
+
+        Recognition quality collapses below ~112px faces, and a face in a
+        full-figure image (T-pose reference, avatar render) is typically
+        40-80px. When the detected face is smaller than *min_face_px*, the
+        padded face region is cropped and upscaled to ~256px and the
+        embedding is taken from that zoom instead.
+        """
         hit = self.detect(image_rgb)
         if hit is None:
             return None
-        face, _ = hit
-        return np.asarray(face.normed_embedding, dtype=np.float32)
+        face, upright_bgr = hit
+        bw = float(face.bbox[2] - face.bbox[0])
+        bh = float(face.bbox[3] - face.bbox[1])
+        if max(bw, bh) >= min_face_px:
+            return np.asarray(face.normed_embedding, dtype=np.float32)
+
+        import cv2
+
+        h, w = upright_bgr.shape[:2]
+        pad = 0.6
+        x1 = max(0, int(face.bbox[0] - bw * pad))
+        y1 = max(0, int(face.bbox[1] - bh * pad))
+        x2 = min(w, int(face.bbox[2] + bw * pad))
+        y2 = min(h, int(face.bbox[3] + bh * pad))
+        if x2 <= x1 or y2 <= y1:
+            return np.asarray(face.normed_embedding, dtype=np.float32)
+        scale = 256.0 / max(bw, bh)
+        crop = cv2.resize(
+            upright_bgr[y1:y2, x1:x2], None, fx=scale, fy=scale,
+            interpolation=cv2.INTER_LANCZOS4,
+        )
+        zoom_hit = self.detect(np.ascontiguousarray(crop[:, :, ::-1]))
+        if zoom_hit is None:
+            return np.asarray(face.normed_embedding, dtype=np.float32)
+        return np.asarray(zoom_hit[0].normed_embedding, dtype=np.float32)
 
 
 def cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:

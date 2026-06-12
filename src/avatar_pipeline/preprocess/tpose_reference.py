@@ -430,10 +430,42 @@ def build_tpose_reference(
 
     _, idx = best
     win_seed, win_img, _ = candidates[idx]
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    win_img.save(out_path)
     print(
         f"[tpose-gate] selected seed {win_seed} "
         f"(identity {best[0]:.3f}, arm_dev {pose_scores[idx]['arm_dev']:.3f})"
     )
+
+    # Identity enhancement: FaceID conditioning cannot impose identity on a
+    # ~50px face (the gate winners measure ~0.1 cosine); transplant the true
+    # candid face (HyperSwap) and restore it (GFPGAN) before the pipeline
+    # ever sees the reference.
+    from avatar_pipeline.preprocess.face_identity import (
+        FaceIdentityExtractor,
+        cosine_similarity,
+    )
+    from avatar_pipeline.preprocess.face_swap import IdentityEnhancer
+
+    extractor = FaceIdentityExtractor()
+    enhancer = IdentityEnhancer()
+    enhanced = enhancer.enhance(
+        np.asarray(win_img, dtype=np.uint8), candid_embed, extractor
+    )
+    post_emb = extractor.embed(enhanced)
+    post_sim = (
+        None if post_emb is None
+        else cosine_similarity(candid_embed, post_emb)
+    )
+    print(
+        f"[tpose-gate] identity after swap+restore: "
+        f"{'n/a' if post_sim is None else f'{post_sim:.3f}'} "
+        f"(was {best[0]:.3f})"
+    )
+    if post_sim is None or post_sim < best[0]:
+        raise RuntimeError(
+            "identity enhancement degraded or lost the face "
+            f"(post-swap similarity {post_sim}); refusing to continue"
+        )
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    Image.fromarray(enhanced).save(out_path)
     return out_path
