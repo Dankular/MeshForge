@@ -17,6 +17,7 @@ class RiggedMesh:
     joint_names: list[str]
     joint_positions: np.ndarray
     skin_weights: np.ndarray
+    joint_parents: np.ndarray | None = None
 
 
 @dataclass

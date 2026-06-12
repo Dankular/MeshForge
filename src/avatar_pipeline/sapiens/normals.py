@@ -18,11 +18,11 @@ class SurfaceNormals:
 
     def load_pretrained(self, checkpoint_path=None) -> None:
         # checkpoint_path unused — model is fetched from HuggingFace
-        self._model = load_model("normal", self._device)
+        self._model = load_model("normal")
 
     def _ensure_loaded(self) -> None:
         if self._model is None:
-            self._model = load_model("normal", self._device)
+            self._model = load_model("normal")
 
     @torch.inference_mode()
     def estimate(self, image: np.ndarray) -> np.ndarray:

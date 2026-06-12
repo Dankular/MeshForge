@@ -6,38 +6,45 @@ import torch
 from avatar_pipeline.models.semantic import SemanticMap
 from avatar_pipeline.sapiens._loader import load_model, preprocess, unwrap
 
-# Goliath 28-class → pipeline internal palette
-# Goliath classes 0 = background; 1–27 = body parts
-# We collapse into 8 semantic regions used downstream.
+# Goliath 28-class → pipeline internal palette.
+# Class order verified against the official sapiens repo
+# (seg/mmseg/datasets/goliath.py GOLIATH_CLASSES — the 34 original classes
+# minus the 6 removed ones), NOT guessed: 0=Background, 1=Apparel,
+# 2=Face_Neck, 3=Hair, 4=Left_Foot, 5=Left_Hand, 6=Left_Lower_Arm,
+# 7=Left_Lower_Leg, 8=Left_Shoe, 9=Left_Sock, 10=Left_Upper_Arm,
+# 11=Left_Upper_Leg, 12=Lower_Clothing, 13=Right_Foot, 14=Right_Hand,
+# 15=Right_Lower_Arm, 16=Right_Lower_Leg, 17=Right_Shoe, 18=Right_Sock,
+# 19=Right_Upper_Arm, 20=Right_Upper_Leg, 21=Torso, 22=Upper_Clothing,
+# 23=Lower_Lip, 24=Upper_Lip, 25=Lower_Teeth, 26=Upper_Teeth, 27=Tongue.
 _GOLIATH_TO_INTERNAL: dict[int, int] = {
-    0:  0,   # background
-    1:  6,   # torso-skin  → skin
-    2:  6,   # right-hand  → skin
-    3:  6,   # left-hand   → skin
-    4:  6,   # right-foot  → skin
-    5:  6,   # left-foot   → skin
-    6:  1,   # right-face  → head
-    7:  1,   # left-face   → head
-    8:  6,   # right-arm-lower → skin
-    9:  6,   # left-arm-lower  → skin
-    10: 6,   # right-arm-upper → skin
-    11: 6,   # left-arm-upper  → skin
-    12: 3,   # right-leg-lower → legs
-    13: 3,   # left-leg-lower  → legs
-    14: 3,   # right-leg-upper → legs
-    15: 3,   # left-leg-upper  → legs
-    16: 1,   # head    → head
-    17: 1,   # neck    → head
-    18: 7,   # left-eye  → eyes
-    19: 7,   # right-eye → eyes
-    20: 1,   # left-brow  → head
-    21: 1,   # right-brow → head
-    22: 1,   # mouth → head
-    23: 1,   # nose  → head
-    24: 4,   # clothing → cloth
-    25: 5,   # hair
-    26: 1,   # left-ear  → head
-    27: 1,   # right-ear → head
+    0:  0,   # Background
+    1:  4,   # Apparel          → cloth
+    2:  1,   # Face_Neck        → head
+    3:  5,   # Hair             → hair
+    4:  3,   # Left_Foot        → legs
+    5:  6,   # Left_Hand        → skin
+    6:  6,   # Left_Lower_Arm   → skin
+    7:  3,   # Left_Lower_Leg   → legs
+    8:  4,   # Left_Shoe        → cloth
+    9:  4,   # Left_Sock        → cloth
+    10: 6,   # Left_Upper_Arm   → skin
+    11: 3,   # Left_Upper_Leg   → legs
+    12: 4,   # Lower_Clothing   → cloth
+    13: 3,   # Right_Foot       → legs
+    14: 6,   # Right_Hand       → skin
+    15: 6,   # Right_Lower_Arm  → skin
+    16: 3,   # Right_Lower_Leg  → legs
+    17: 4,   # Right_Shoe       → cloth
+    18: 4,   # Right_Sock       → cloth
+    19: 6,   # Right_Upper_Arm  → skin
+    20: 3,   # Right_Upper_Leg  → legs
+    21: 2,   # Torso            → torso
+    22: 4,   # Upper_Clothing   → cloth
+    23: 1,   # Lower_Lip        → head
+    24: 1,   # Upper_Lip        → head
+    25: 1,   # Lower_Teeth      → head
+    26: 1,   # Upper_Teeth      → head
+    27: 1,   # Tongue           → head
 }
 
 _LUT = np.array(
@@ -67,11 +74,11 @@ class HumanParser:
         self._device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     def load_pretrained(self, checkpoint_path=None) -> None:
-        self._model = load_model("seg", self._device)
+        self._model = load_model("seg")
 
     def _ensure_loaded(self) -> None:
         if self._model is None:
-            self._model = load_model("seg", self._device)
+            self._model = load_model("seg")
 
     @torch.inference_mode()
     def parse(self, image: np.ndarray) -> SemanticMap:

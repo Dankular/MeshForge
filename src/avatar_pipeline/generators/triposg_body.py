@@ -27,7 +27,7 @@ class TripoSGConfig:
     num_tokens: int = 2048
     octree_depth: int = 9
     use_flash_decoder: bool = True
-    target_faces: int = 80_000   # decimate to this before UV unwrap / rigging
+    target_faces: int = 80_000   # decimate before UV unwrap and SkinTokens
 
 
 class TripoSGBodyGenerator:
@@ -44,11 +44,12 @@ class TripoSGBodyGenerator:
         from briarmbg import BriaRMBG
 
         ckpt = str(checkpoint_path or CHECKPOINT)
-        self._pipe = TripoSGPipeline.from_pretrained(ckpt).to(
-            self._device, torch.float16
-        )
-        self._rmbg = BriaRMBG.from_pretrained(str(TRIPOSG_REPO / "pretrained_weights" / "RMBG-1.4")).to(self._device) \
-            if (TRIPOSG_REPO / "pretrained_weights" / "RMBG-1.4").exists() else None
+        # Loaded onto CPU deliberately — mmgp.offload manages GPU residency
+        # (see AvatarPipeline._setup_offload, which wraps every heavy model
+        # in one shared memory-management domain).
+        self._pipe = TripoSGPipeline.from_pretrained(ckpt)
+        rmbg_dir = TRIPOSG_REPO / "pretrained_weights" / "RMBG-1.4"
+        self._rmbg = BriaRMBG.from_pretrained(str(rmbg_dir)) if rmbg_dir.exists() else None
 
     def _ensure_loaded(self) -> None:
         if self._pipe is None:
@@ -109,6 +110,16 @@ class TripoSGBodyGenerator:
         else:
             verts = raw_v.astype(np.float32)
             faces = raw_f
+
+        # TripoSG's flash decoder can emit clockwise-wound faces (inward
+        # normals). Downstream consumers need outward orientation: MV-Adapter's
+        # camera projection rejects texels whose normals face away from every
+        # camera (aoi_cos threshold), and GLB viewers backface-cull. A negative
+        # signed volume on a winding-consistent mesh means a single global flip.
+        import trimesh
+        if trimesh.Trimesh(vertices=verts, faces=faces, process=False).volume < 0:
+            faces = faces[:, ::-1].copy()
+            print("  TripoSG mesh: flipped face winding to outward orientation")
 
         print(f"  TripoSG mesh: {len(verts):,} verts  {len(faces):,} faces")
         return Mesh(

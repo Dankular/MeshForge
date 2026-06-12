@@ -33,14 +33,24 @@ CHECKPOINTS: tuple[CheckpointSpec, ...] = (
         relative_path="pshuman/vae/diffusion_pytorch_model.safetensors",
     ),
     CheckpointSpec(
-        name="unirig_skeleton",
-        url="https://huggingface.co/VAST-AI/UniRig/resolve/main/skeleton/articulation-xl_quantization_256/model.ckpt",
-        relative_path="unirig/skeleton_articulation_xl/model.ckpt",
+        name="skintokens_tokenrig",
+        url="https://huggingface.co/VAST-AI/SkinTokens/resolve/main/experiments/articulation_xl_quantization_256_token_4/grpo_1400.ckpt",
+        relative_path="skintokens/experiments/articulation_xl_quantization_256_token_4/grpo_1400.ckpt",
     ),
     CheckpointSpec(
-        name="unirig_skin",
-        url="https://huggingface.co/VAST-AI/UniRig/resolve/main/skin/articulation-xl/model.ckpt",
-        relative_path="unirig/skin_articulation_xl/model.ckpt",
+        name="skintokens_vae",
+        url="https://huggingface.co/VAST-AI/SkinTokens/resolve/main/experiments/skin_vae_2_10_32768/last.ckpt",
+        relative_path="skintokens/experiments/skin_vae_2_10_32768/last.ckpt",
+    ),
+    CheckpointSpec(
+        name="skintokens_qwen_config",
+        url="https://huggingface.co/Qwen/Qwen3-0.6B/resolve/main/config.json",
+        relative_path="skintokens/models/Qwen3-0.6B/config.json",
+    ),
+    CheckpointSpec(
+        name="ip_adapter_faceid_plusv2",
+        url="https://huggingface.co/h94/IP-Adapter-FaceID/resolve/main/ip-adapter-faceid-plusv2_sd15.bin",
+        relative_path="ip_adapter/ip-adapter-faceid-plusv2_sd15.bin",
     ),
     CheckpointSpec(
         name="sapiens2_seg_1b",
@@ -76,11 +86,22 @@ def resolve_dynamic_checkpoint_urls() -> dict[str, str]:
             "pengHTYX/PSHuman_Unclip_768_6views",
             "vae/diffusion_pytorch_model.safetensors",
         ),
-        "unirig_skeleton": (
-            "VAST-AI/UniRig",
-            "skeleton/articulation-xl_quantization_256/model.ckpt",
+        "skintokens_tokenrig": (
+            "VAST-AI/SkinTokens",
+            "experiments/articulation_xl_quantization_256_token_4/grpo_1400.ckpt",
         ),
-        "unirig_skin": ("VAST-AI/UniRig", "skin/articulation-xl/model.ckpt"),
+        "skintokens_vae": (
+            "VAST-AI/SkinTokens",
+            "experiments/skin_vae_2_10_32768/last.ckpt",
+        ),
+        "skintokens_qwen_config": (
+            "Qwen/Qwen3-0.6B",
+            "config.json",
+        ),
+        "ip_adapter_faceid_plusv2": (
+            "h94/IP-Adapter-FaceID",
+            "ip-adapter-faceid-plusv2_sd15.bin",
+        ),
         "sapiens2_seg_1b": ("facebook/sapiens2-seg-1b", "model.safetensors"),
         "sapiens2_normal_1b": ("facebook/sapiens2-normal-1b", "model.safetensors"),
         "sapiens2_pointmap_1b": (

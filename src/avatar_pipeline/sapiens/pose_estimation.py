@@ -27,11 +27,11 @@ class PoseEstimator:
         self.n_kpts = n_kpts
 
     def load_pretrained(self, checkpoint_path=None) -> None:
-        self._model = load_model("pose", self._device)
+        self._model = load_model("pose")
 
     def _ensure_loaded(self) -> None:
         if self._model is None:
-            self._model = load_model("pose", self._device)
+            self._model = load_model("pose")
 
     @torch.inference_mode()
     def estimate(self, image: np.ndarray) -> PoseData:

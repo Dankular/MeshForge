@@ -6,3 +6,7 @@ requires-python = ">=3.11"
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]
+# "slow" = full-pipeline e2e runs (TripoSG + diffusion bake + rig; ~1h each on
+# the RTX 4060). Excluded by default; run them with: pytest -m slow
+markers = ["slow: full end-to-end pipeline runs with real models"]
+addopts = "-m 'not slow'"

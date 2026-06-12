@@ -1,16 +1,17 @@
 import numpy as np
 
 from avatar_pipeline.models.semantic import SemanticMap
-from avatar_pipeline.pretrained_stats import checkpoint_signature
 
 
 class PointmapEstimator:
+    """Back-projects the Sapiens depth map into a camera-space pointmap.
+
+    Purely geometric: (x, y) come from the pixel grid, z from the real
+    estimated depth. No learned weights are involved.
+    """
+
     def __init__(self) -> None:
         self.depth_scale = 2.0
-
-    def load_pretrained(self, checkpoint_path) -> None:
-        _, _, c = checkpoint_signature(checkpoint_path)
-        self.depth_scale = float(np.clip(1.6 + 1.0 * c, 1.4, 2.8))
 
     def estimate(self, depth: np.ndarray, semantic_map: SemanticMap) -> np.ndarray:
         h, w = depth.shape

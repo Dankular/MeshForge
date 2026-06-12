@@ -1,121 +1,242 @@
+"""PSHuman head-detail generator — real 7-view unclip diffusion + SMPL-X carve.
+
+Runs PSHuman (external/PSHuman) in-process on the head crop derived from the
+Sapiens segmentation. The diffusion components are built on CPU at load time
+and registered into the pipeline's shared mmgp offload domain; PIXIE, the
+person detector, and the carve optimizer take short-lived explicit GPU
+residency inside generate() instead (they are not plain torch modules).
+
+Two hard rules learned the expensive way:
+  - never swap the unet's attention processors (enable_attention_slicing
+    silently disables the custom multiview attention and the carve NaNs out);
+    xformers is the model's intended path.
+  - construct smplx/PIXIE under a CPU default-device context: mmgp's global
+    cuda default-device mode breaks the numpy/tensor interop inside their
+    constructors and lazy detector builds.
+"""
+from __future__ import annotations
+
+import sys
+import types
+from pathlib import Path
+
 import numpy as np
-from scipy.ndimage import gaussian_filter1d
+import torch
 
-from avatar_pipeline.models.mesh import Mesh
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+PSHUMAN_DIR = _REPO_ROOT / "external" / "PSHuman"
+PSHUMAN_CHECKPOINT_DIR = _REPO_ROOT / "checkpoints" / "pshuman"
+
+_HEAD_LABELS = (1, 5)  # internal palette: head, hair
 
 
-class HeadGenerator:
-    def _head_shape_from_mask(
-        self, head_mask: np.ndarray
-    ) -> tuple[float, float, float]:
-        h, w = head_mask.shape
-        ys, xs = np.where(head_mask)
-        if ys.size < 8:
-            return 1.0, 1.1, 0.9
-        width = float(np.max(xs) - np.min(xs) + 1)
-        height = float(np.max(ys) - np.min(ys) + 1)
-        ratio = np.clip(width / max(height, 1.0), 0.6, 1.2)
+def _bootstrap_pshuman_imports() -> None:
+    if str(PSHUMAN_DIR) not in sys.path:
+        sys.path.insert(0, str(PSHUMAN_DIR))
+    # PSHuman's utils/ is a namespace package and the vastai CLI installs a
+    # regular top-level `utils` package that would win resolution.
+    existing = sys.modules.get("utils")
+    if existing is None or not getattr(existing, "__path__", [None])[0] == str(
+        PSHUMAN_DIR / "utils"
+    ):
+        utils_pkg = types.ModuleType("utils")
+        utils_pkg.__path__ = [str(PSHUMAN_DIR / "utils")]
+        sys.modules["utils"] = utils_pkg
 
-        row_widths = np.zeros(h, dtype=np.float32)
-        for y in range(h):
-            row = np.where(head_mask[y])[0]
-            if row.size > 1:
-                row_widths[y] = float(row[-1] - row[0] + 1)
-        row_widths = gaussian_filter1d(row_widths, sigma=1.4)
-        mid = int(np.argmax(row_widths)) if np.any(row_widths > 0) else h // 2
-        upper = np.mean(row_widths[max(0, mid - h // 6) : mid + 1])
-        lower = np.mean(row_widths[mid : min(h, mid + h // 6)])
-        jaw_ratio = np.clip(lower / max(upper, 1e-6), 0.65, 1.1)
 
-        sx = float(0.85 + 0.35 * ratio)
-        sy = float(1.0 + 0.25 * (1.0 / max(ratio, 0.6)))
-        sz = float(0.78 + 0.25 * jaw_ratio)
-        return sx, sy, sz
-
-    def generate(self, inputs: dict) -> Mesh:
-        radius = float(inputs.get("radius", 0.22))
-        subdivisions = int(inputs.get("subdivisions", 2))
-        head_mask = inputs.get("head_mask")
-
-        phi = (1.0 + np.sqrt(5.0)) / 2.0
-        vertices = np.array(
-            [
-                [-1, phi, 0],
-                [1, phi, 0],
-                [-1, -phi, 0],
-                [1, -phi, 0],
-                [0, -1, phi],
-                [0, 1, phi],
-                [0, -1, -phi],
-                [0, 1, -phi],
-                [phi, 0, -1],
-                [phi, 0, 1],
-                [-phi, 0, -1],
-                [-phi, 0, 1],
-            ],
-            dtype=np.float64,
+def extract_head_crop_rgba(
+    processed: np.ndarray, seg_labels: np.ndarray, margin: float = 0.35
+) -> np.ndarray:
+    """Square RGBA crop of the head+hair region; alpha limited to the head."""
+    head_mask = np.isin(seg_labels, _HEAD_LABELS)
+    if head_mask.sum() < 100:
+        raise RuntimeError(
+            f"Segmentation found only {int(head_mask.sum())} head pixels; "
+            "cannot build a head crop"
         )
-        faces = np.array(
-            [
-                [0, 11, 5],
-                [0, 5, 1],
-                [0, 1, 7],
-                [0, 7, 10],
-                [0, 10, 11],
-                [1, 5, 9],
-                [5, 11, 4],
-                [11, 10, 2],
-                [10, 7, 6],
-                [7, 1, 8],
-                [3, 9, 4],
-                [3, 4, 2],
-                [3, 2, 6],
-                [3, 6, 8],
-                [3, 8, 9],
-                [4, 9, 5],
-                [2, 4, 11],
-                [6, 2, 10],
-                [8, 6, 7],
-                [9, 8, 1],
-            ],
-            dtype=np.int32,
+    ys, xs = np.where(head_mask)
+    y0, y1, x0, x1 = ys.min(), ys.max(), xs.min(), xs.max()
+    h, w = head_mask.shape
+    side = int(max(y1 - y0, x1 - x0) * (1.0 + margin))
+    cy, cx = (y0 + y1) // 2, (x0 + x1) // 2
+    half = side // 2
+    top, left = max(0, cy - half), max(0, cx - half)
+    bottom, right = min(h, top + side), min(w, left + side)
+
+    crop = processed[top:bottom, left:right]
+    alpha = head_mask[top:bottom, left:right].astype(np.float32)
+    rgba = np.dstack([crop[:, :, :3], np.minimum(crop[:, :, 3], alpha)])
+    return np.clip(rgba * 255.0, 0, 255).astype(np.uint8)
+
+
+class PSHumanHeadGenerator:
+    def __init__(self, num_inference_steps: int = 40, seed: int = 42) -> None:
+        self.num_inference_steps = num_inference_steps
+        self.seed = seed
+        self._pipe = None
+
+    def load_pretrained(self, checkpoint_dir: Path | None = None) -> None:
+        _bootstrap_pshuman_imports()
+        from mvdiffusion.pipelines.pipeline_mvdiffusion_unclip import (
+            StableUnCLIPImg2ImgPipeline,
         )
 
-        for _ in range(max(0, subdivisions)):
-            edge_mid = {}
-            new_faces = []
+        ckpt = checkpoint_dir or PSHUMAN_CHECKPOINT_DIR
+        # CPU + fp16: the shared mmgp domain streams these to the GPU.
+        self._pipe = StableUnCLIPImg2ImgPipeline.from_pretrained(
+            str(ckpt), torch_dtype=torch.float16
+        )
+        self._pipe.unet.enable_xformers_memory_efficient_attention()
 
-            def midpoint(a: int, b: int) -> int:
-                key = (a, b) if a < b else (b, a)
-                if key in edge_mid:
-                    return edge_mid[key]
-                v = (vertices[a] + vertices[b]) * 0.5
-                edge_mid[key] = len(v_list)
-                v_list.append(v)
-                return edge_mid[key]
+    def heavy_components(self) -> dict[str, torch.nn.Module]:
+        """Diffusion components for the shared mmgp domain."""
+        if self._pipe is None:
+            raise RuntimeError("PSHumanHeadGenerator is not loaded")
+        return {
+            "pshuman_unet": self._pipe.unet,
+            "pshuman_vae": self._pipe.vae,
+            "pshuman_image_encoder": self._pipe.image_encoder,
+            "pshuman_text_encoder": self._pipe.text_encoder,
+        }
 
-            v_list = [v for v in vertices]
-            for tri in faces:
-                a, b, c = int(tri[0]), int(tri[1]), int(tri[2])
-                ab = midpoint(a, b)
-                bc = midpoint(b, c)
-                ca = midpoint(c, a)
-                new_faces.extend([[a, ab, ca], [b, bc, ab], [c, ca, bc], [ab, bc, ca]])
+    def generate(
+        self,
+        processed: np.ndarray,    # float32 (H, W, 4) RGBA in [0, 1]
+        seg_labels: np.ndarray,   # (H, W) int32 internal palette
+        work_dir: str,
+    ) -> str:
+        """Run PSHuman on the head crop. Returns the colored OBJ path."""
+        if self._pipe is None:
+            raise RuntimeError("PSHumanHeadGenerator is not loaded")
+        _bootstrap_pshuman_imports()
+        if torch.cuda.is_available():
+            # Tiny buffer-only module used during image-embedding noising;
+            # not in the mmgp domain, so pin it to the GPU explicitly.
+            self._pipe.image_normalizer.to("cuda")
+        import os
 
-            vertices = np.asarray(v_list, dtype=np.float64)
-            faces = np.asarray(new_faces, dtype=np.int32)
+        from omegaconf import OmegaConf
+        from PIL import Image
 
-        norms = np.linalg.norm(vertices, axis=1, keepdims=True) + 1e-8
-        vertices = (vertices / norms) * radius
-        sx, sy, sz = (1.0, 1.1, 0.9)
-        if isinstance(head_mask, np.ndarray):
-            sx, sy, sz = self._head_shape_from_mask(head_mask.astype(bool))
-        vertices[:, 0] *= sx
-        vertices[:, 1] *= sy
-        vertices[:, 2] *= sz
+        # Absolute: everything below runs with CWD switched to the PSHuman
+        # repo (its data paths are CWD-relative), so a relative work_dir
+        # would silently re-root.
+        work = Path(work_dir).resolve()
+        img_dir = work / "input"
+        img_dir.mkdir(parents=True, exist_ok=True)
+        crop = extract_head_crop_rgba(processed, seg_labels)
+        Image.fromarray(crop, "RGBA").save(img_dir / "head.png")
 
-        jaw_mask = vertices[:, 1] < np.quantile(vertices[:, 1], 0.28)
-        vertices[jaw_mask, 0] *= 0.92
-        vertices[jaw_mask, 2] *= 0.95
-        vertices = vertices.astype(np.float32)
-        return Mesh(vertices=vertices, faces=faces, semantic_regions=["head"])
+        # PSHuman's utils.misc registers OmegaConf resolvers at import; in
+        # the integrated process SkinTokens' loader already registered some
+        # of the same names (identical lambdas). Clear them so PSHuman's
+        # import can re-register without colliding.
+        for _name in ("calc_exp_lr_decay_rate", "add", "sub", "mul",
+                      "div", "idiv", "basename"):
+            OmegaConf.clear_resolver(_name)
+
+        # PSHuman resolves smpl_related/ and mvdiffusion/data/ from CWD.
+        prev_cwd = os.getcwd()
+        os.chdir(PSHUMAN_DIR)
+        try:
+            from utils.misc import load_config
+
+            cfg = load_config(
+                str(PSHUMAN_DIR / "configs" / "inference-768-6view.yaml"),
+                cli_args=[
+                    f"pretrained_model_name_or_path={PSHUMAN_CHECKPOINT_DIR.as_posix()}",
+                    f"validation_dataset.root_dir={img_dir.as_posix()}",
+                    f"save_dir={work.as_posix()}",
+                    "validation_dataset.crop_size=740",
+                    "with_smpl=false",
+                    "num_views=7",
+                    "save_mode=rgb",
+                    f"seed={self.seed}",
+                    f"pipe_validation_kwargs.num_inference_steps={self.num_inference_steps}",
+                    f"recon_opt.res_path={(work / 'recon').as_posix()}",
+                ],
+            )
+            from inference import TestConfig, run_inference
+
+            cfg = OmegaConf.merge(OmegaConf.structured(TestConfig), cfg)
+
+            from mvdiffusion.data.single_image_dataset import SingleImageDataset
+
+            dataset = SingleImageDataset(**cfg.validation_dataset)
+            dataloader = torch.utils.data.DataLoader(
+                dataset, batch_size=cfg.validation_batch_size,
+                shuffle=False, num_workers=0,
+            )
+
+            # CPU default-device context: smplx/PIXIE constructors and the
+            # lazily-built detector do numpy/tensor interop that breaks under
+            # mmgp's global cuda default-device mode. Explicit .to(device)
+            # calls inside still place the models on the GPU.
+            with torch.device("cpu"):
+                from econdataset import SMPLDataset
+
+                econdata = SMPLDataset(
+                    {
+                        "image_dir": str(img_dir),
+                        "seg_dir": None,
+                        "colab": False,
+                        "has_det": True,
+                        "hps_type": "pixie",
+                    },
+                    device="cuda",
+                )
+                from reconstruct import ReMesh
+
+                carving = ReMesh(cfg.recon_opt, econ_dataset=econdata)
+                poses = {i: econdata[i] for i in range(len(dataset))}
+
+            class _CachedPoses:
+                def __init__(self, econ, cache):
+                    self._econ, self._cache = econ, cache
+
+                def __getitem__(self, i):
+                    return self._cache[i]
+
+                def __getattr__(self, name):
+                    return getattr(self._econ, name)
+
+            class _NativeDeviceCarving:
+                """Run the carve with NO default-device mode active: it
+                mixes numpy-derived CPU tensors, default-device creations
+                (kornia kernels) and pytorch3d legacy sparse constructors,
+                which misallocate under any active device mode. Restore
+                mmgp's cuda default afterwards."""
+
+                def __init__(self, inner):
+                    self._inner = inner
+
+                def optimize_case(self, *args, **kwargs):
+                    torch.set_default_device(None)
+                    try:
+                        return self._inner.optimize_case(*args, **kwargs)
+                    finally:
+                        torch.set_default_device("cuda")
+
+                def __getattr__(self, name):
+                    return getattr(self._inner, name)
+
+            run_inference(
+                dataloader,
+                _CachedPoses(econdata, poses),
+                self._pipe,
+                _NativeDeviceCarving(carving),
+                cfg,
+                str(work),
+            )
+        finally:
+            os.chdir(prev_cwd)
+
+        hits = sorted((work / "recon").rglob("result_clr_scale*.obj"))
+        if not hits:
+            raise RuntimeError(
+                f"PSHuman produced no colored mesh under {work / 'recon'}"
+            )
+        del econdata, carving
+        torch.cuda.empty_cache()
+        print(f"  PSHuman head mesh: {hits[-1]}")
+        return str(hits[-1])

@@ -77,6 +77,11 @@ class GLBExporter:
                 "joint_names": mesh.joint_names,
                 "joint_count": len(mesh.joint_names),
                 "joint_positions": mesh.joint_positions.astype(float).tolist(),
+                "joint_parents": (
+                    mesh.joint_parents.astype(int).tolist()
+                    if mesh.joint_parents is not None
+                    else None
+                ),
             },
             "textures": {
                 "albedo_shape": list(textures.albedo.shape),

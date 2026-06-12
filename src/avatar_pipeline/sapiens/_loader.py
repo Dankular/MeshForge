@@ -46,7 +46,7 @@ def preprocess(image_rgba: np.ndarray, device: torch.device) -> torch.Tensor:
     return torch.from_numpy(t).permute(2, 0, 1).unsqueeze(0).to(device)
 
 
-def load_model(task: str, device: torch.device) -> torch.jit.ScriptModule:
+def load_model(task: str) -> torch.jit.ScriptModule:
     """Download (once) and load a Sapiens 1b TorchScript model."""
     from huggingface_hub import hf_hub_download, list_repo_files
     import pathlib
@@ -59,7 +59,9 @@ def load_model(task: str, device: torch.device) -> torch.jit.ScriptModule:
         raise FileNotFoundError(f"No .pt2 in {repo}")
 
     local = hf_hub_download(repo_id=repo, filename=files[-1], cache_dir=cache)
-    model = torch.jit.load(local, map_location=device)
+    # Loaded onto CPU deliberately — mmgp.offload manages GPU residency for
+    # every heavy model in the pipeline from one shared memory-management domain.
+    model = torch.jit.load(local, map_location="cpu")
     model.eval()
     return model
 

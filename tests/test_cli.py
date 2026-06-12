@@ -1,11 +1,13 @@
 import json
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 from avatar_pipeline.main import app
 
 
+@pytest.mark.slow
 def test_cli_run_command_with_workspace_image(tmp_path):
     workspace_image = Path(__file__).resolve().parents[1] / "test.png"
     assert workspace_image.exists()

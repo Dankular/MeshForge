@@ -21,11 +21,11 @@ class DepthEstimator:
         self._last_pointmap: np.ndarray | None = None
 
     def load_pretrained(self, checkpoint_path=None) -> None:
-        self._model = load_model("depth", self._device)
+        self._model = load_model("depth")
 
     def _ensure_loaded(self) -> None:
         if self._model is None:
-            self._model = load_model("depth", self._device)
+            self._model = load_model("depth")
 
     @property
     def pointmap(self) -> np.ndarray | None:
