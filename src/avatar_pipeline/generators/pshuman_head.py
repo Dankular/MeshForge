@@ -119,6 +119,16 @@ class PSHumanHeadGenerator:
         rgba = np.clip(processed * 255.0, 0, 255).astype(np.uint8)
         return self._run_case(rgba, "body", work_dir)
 
+    def generate_from_rgba(
+        self,
+        rgba: np.ndarray,         # uint8 (H, W, 4) RGBA
+        work_dir: str,
+        scene: str = "portrait",
+    ) -> str:
+        """Run PSHuman on an arbitrary RGBA crop (e.g. the FaceID-synthesized
+        perspective-neutral portrait). Returns the colored OBJ path."""
+        return self._run_case(rgba, scene, work_dir)
+
     def _run_case(
         self,
         rgba: np.ndarray,         # uint8 (H, W, 4) RGBA

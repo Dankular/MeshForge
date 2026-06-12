@@ -70,10 +70,15 @@ _TEXTURE_SCHEMA_KEY = "texture_schema_version"
 class PipelineConfig:
     uv_size: int = 2048
     checkpoint_root: str = str(_REPO_ROOT / "checkpoints")
-    # Use PSHuman's native full-figure reconstruction (SMPL-X-guided) for
-    # body AND head, skipping TripoSG and the head transplant entirely
-    # (CODEX migration step 3).
-    full_pshuman: bool = False
+    # PSHuman's native full-figure reconstruction (SMPL-X-guided) for body
+    # AND head is the default (CODEX steps 3-4; TripoSG is retired to the
+    # legacy --triposg-body arm and its weights are not even loaded here).
+    full_pshuman: bool = True
+    # Perspective-neutral FaceID portrait (written by --from-candid): when
+    # set, PSHuman carves a high-fidelity head from it (multiview diffusion
+    # supplies the depth a single warped candid view cannot) and the result
+    # is transplanted onto the full-figure body.
+    face_portrait: str | None = None
 
 
 # ── UV unwrap ─────────────────────────────────────────────────────────────────
@@ -187,7 +192,9 @@ class AvatarPipeline:
         paths = resolve_checkpoint_paths(root)
 
         triposg = root / "triposg"
-        if triposg.exists():
+        if triposg.exists() and not self.config.full_pshuman:
+            # Legacy arm only: in full-PSHuman mode TripoSG never runs, so
+            # its weights stay off the mmgp domain entirely.
             self.generator.load_pretrained(triposg)
 
         # Sapiens estimators normally lazy-load on first use; load them now so
@@ -529,6 +536,62 @@ class AvatarPipeline:
         state["head_detail"] = True  # nothing left to transplant
         return body
 
+    def _generate_portrait_head(
+        self,
+        portrait_rgb: np.ndarray,
+        state: dict,
+        work_dir: str,
+    ) -> str:
+        """PSHuman head mesh from the perspective-neutral FaceID portrait,
+        cached by the portrait's foreground content."""
+        from avatar_pipeline.runtime.cache import HEAD_DETAIL_VERSION
+
+        rgba = self.preprocess.process(portrait_rgb)
+        rgba_u8 = np.clip(rgba * 255.0, 0, 255).astype(np.uint8)
+        key = content_key(
+            rgba_u8,
+            f"seed={self.head_detail.seed}",
+            f"steps={self.head_detail.num_inference_steps}",
+            f"v{HEAD_DETAIL_VERSION}",
+            "portrait",
+        )
+        head_obj = artifact_get(state, "portrait_head_obj", key)
+        if head_obj is not None and Path(head_obj).exists():
+            print("  [cache] reusing portrait head mesh")
+            return head_obj
+        head_obj = self.head_detail.generate_from_rgba(rgba_u8, work_dir)
+        artifact_put(state, "portrait_head_obj", key, head_obj)
+        return head_obj
+
+    def _full_pshuman_mesh(
+        self,
+        processed: np.ndarray,
+        state: dict,
+        output_dir: str,
+    ) -> Mesh:
+        """Full-figure PSHuman body, plus the portrait-head transplant when
+        a FaceID portrait is available (candid flow)."""
+        body = self._generate_full_body(
+            processed, state,
+            work_dir=str(Path(output_dir) / "pshuman_full"),
+        )
+        portrait = state.get("face_portrait")
+        if portrait is None and self.config.face_portrait:
+            portrait = np.array(
+                Image.open(self.config.face_portrait).convert("RGB"),
+                dtype=np.uint8,
+            )
+            state["face_portrait"] = portrait
+        if portrait is not None:
+            print("  portrait-head transplant ...")
+            head_obj = self._generate_portrait_head(
+                portrait, state,
+                work_dir=str(Path(output_dir) / "pshuman_portrait"),
+            )
+            body = _fuse_head(body, head_obj, state)
+            state["head_detail"] = True
+        return body
+
     def _refuse_head_from_cache(
         self,
         state: dict,
@@ -668,12 +731,11 @@ class AvatarPipeline:
 
             rebuild_reason = None
             if state.get("full_pshuman"):
-                # No transplant in this mode; if the pre-unwrap mesh is gone
-                # rebuild it from the cached full-figure artifact.
+                # If the pre-unwrap mesh is gone rebuild it from the cached
+                # full-figure (and portrait-head) artifacts.
                 if body is None and body_fused is None:
-                    body_fused = self._generate_full_body(
-                        processed, state,
-                        work_dir=str(Path(output_dir) / "pshuman_full"),
+                    body_fused = self._full_pshuman_mesh(
+                        processed, state, output_dir
                     )
                     rebuild_reason = "full-figure mesh rebuilt"
             elif self._head_detail_is_stale(state) or (
@@ -699,9 +761,8 @@ class AvatarPipeline:
                 print(f"[snapshot] rebaking textures: {rebuild_reason}")
                 if body_fused is None:
                     if state.get("full_pshuman"):
-                        body_fused = self._generate_full_body(
-                            processed, state,
-                            work_dir=str(Path(output_dir) / "pshuman_full"),
+                        body_fused = self._full_pshuman_mesh(
+                            processed, state, output_dir
                         )
                     elif state.get("body_prefusion") is not None:
                         # Snapshot predates body_fused: rebuild the pre-unwrap
@@ -749,13 +810,10 @@ class AvatarPipeline:
             }
 
             if self.config.full_pshuman:
-                # 3-5. PSHuman full-figure reconstruction: body + head in one
-                # SMPL-X-guided piece — no TripoSG, no transplant.
+                # 3-5. PSHuman full-figure reconstruction (+ portrait-head
+                # transplant in the candid flow) — no TripoSG.
                 print("[3-5/8] PSHuman full-figure reconstruction ...")
-                body = self._generate_full_body(
-                    processed, state,
-                    work_dir=str(Path(output_dir) / "pshuman_full"),
-                )
+                body = self._full_pshuman_mesh(processed, state, output_dir)
             else:
                 # 3. TripoSG body mesh
                 print("[3/8] TripoSG ...")

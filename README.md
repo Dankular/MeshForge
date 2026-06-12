@@ -33,17 +33,20 @@ python -m avatar_pipeline.main <input.png> <output_dir> --snapshot <cache.pkl>
 missing head detail, inward winding) upgrade themselves on load without
 rerunning TripoSG.
 
-`--full-pshuman` reconstructs body AND head with PSHuman's native
-full-figure SMPL-X-guided pipeline (CODEX migration step 3) — no TripoSG,
-no head transplant; PSHuman's own vertex colors above the detected neck
-line still drive the head region of the atlas.
+PSHuman's native full-figure SMPL-X-guided reconstruction is the default
+body+head source (A/B-verified: silhouette IoU 0.97 vs TripoSG's 0.72);
+`--triposg-body` restores the legacy TripoSG + head-transplant arm.
 
 `--from-candid` accepts a candid photo (face or partial face+body) instead
 of a T-pose reference: IP-Adapter FaceID PlusV2 (external/IP-Adapter, weights
 from h94/IP-Adapter-FaceID) + an OpenPose ControlNet conditioned on a
-synthetic T-pose skeleton synthesize `<output_dir>/tpose_reference.png`,
-which then feeds the normal pipeline. The SD15 stack loads, runs, and unloads
-before the main pipeline's mmgp domain comes up.
+synthetic T-pose skeleton synthesize a gated best-of-N
+`<output_dir>/tpose_reference.png` (strict-pose + identity scoring,
+HyperSwap + GFPGAN identity enhancement), plus a perspective-neutral
+`face_portrait.png` that PSHuman carves into a high-fidelity head
+(multiview diffusion supplies the depth a single warped candid view
+cannot) transplanted onto the full-figure body. The SD15 stack loads,
+runs, and unloads before the main pipeline's mmgp domain comes up.
 
 ## Memory
 

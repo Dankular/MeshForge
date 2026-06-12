@@ -79,6 +79,7 @@ class IdentityEnhancer:
         image_rgb: np.ndarray,
         source_embedding: np.ndarray,
         extractor,
+        full_frame_upscale: bool = False,
     ) -> np.ndarray:
         """Swap the source identity onto the largest face and restore it.
 
@@ -130,6 +131,17 @@ class IdentityEnhancer:
             / 255
         )
         swapped = (of * mf + bgr * (1 - mf)).clip(0, 255).astype(np.uint8)
+
+        if full_frame_upscale:
+            # Portrait path: restore + 2x upscale the whole frame (face
+            # dominates it), e.g. 512 -> 1024 for the PSHuman head carve.
+            _, _, restored = self._get_restorer().enhance(
+                swapped, has_aligned=False, only_center_face=True,
+                paste_back=True, weight=0.5,
+            )
+            if restored is None:
+                raise RuntimeError("GFPGAN returned no restored frame")
+            return np.ascontiguousarray(restored[:, :, ::-1])
 
         # GFPGAN restore on the padded face crop (same bbox, weight 0.5).
         b = face.bbox.astype(int)

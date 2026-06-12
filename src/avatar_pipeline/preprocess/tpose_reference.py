@@ -182,6 +182,22 @@ class TPoseReferenceGenerator:
 
     width = 512
     height = 768
+    # Perspective-neutral close-up for the PSHuman head carve: a candid is a
+    # single warped view (selfie-distance perspective bakes a distorted face
+    # shape); FaceID re-synthesizes the identity at portrait framing with
+    # telephoto perspective, and PSHuman's 7-view diffusion + SMPL-X carve
+    # then supplies the missing views/depth for corrected face geometry.
+    portrait_size = 512
+    portrait_prompt = (
+        "frontal head and shoulders studio portrait photo of a person, "
+        "looking directly at the camera, neutral expression, hair fully "
+        "visible, even soft lighting, plain light gray background, "
+        "85mm lens, sharp focus, high detail skin texture"
+    )
+    portrait_negative_prompt = (
+        "monochrome, lowres, bad anatomy, worst quality, low quality, "
+        "blurry, tilted head, profile, side view, sunglasses, hat, cropped"
+    )
     prompt = (
         "full body photo of a person standing upright in a T-pose, arms held "
         "straight out horizontally to the sides, fingers extended, legs "
@@ -321,6 +337,36 @@ class TPoseReferenceGenerator:
         )
         return images[0]
 
+    def generate_portrait_one(
+        self,
+        faceid_embeds: torch.Tensor,
+        face_image: np.ndarray,
+        seed: int,
+    ) -> Image.Image:
+        """Frontal close-up portrait (no pose control: black control image
+        at conditioning scale 0 turns the ControlNet pipe into plain SD15)."""
+        if self._ip_model is None:
+            self.load_pretrained()
+        blank_control = Image.new(
+            "RGB", (self.portrait_size, self.portrait_size), (0, 0, 0)
+        )
+        images = self._ip_model.generate(
+            prompt=self.portrait_prompt,
+            negative_prompt=self.portrait_negative_prompt,
+            face_image=face_image,
+            faceid_embeds=faceid_embeds,
+            shortcut=True,
+            s_scale=1.0,
+            num_samples=1,
+            width=self.portrait_size,
+            height=self.portrait_size,
+            num_inference_steps=self.num_inference_steps,
+            seed=seed,
+            image=blank_control,
+            controlnet_conditioning_scale=0.0,
+        )
+        return images[0]
+
     def generate(self, input_image: str, out_path: Path) -> Path:
         """Single-shot generation at the configured seed (no gate)."""
         image = np.array(Image.open(input_image).convert("RGB"), dtype=np.uint8)
@@ -346,6 +392,8 @@ def build_tpose_reference(
     seed: int = 2023,
     num_candidates: int = 4,
     min_identity: float = 0.15,
+    portrait_out: Path | None = None,
+    min_portrait_identity: float = 0.4,
 ) -> Path:
     """Gated best-of-N reference synthesis.
 
@@ -377,6 +425,14 @@ def build_tpose_reference(
             path = cand_dir / f"seed_{cand_seed}.png"
             img.save(path)
             candidates.append((cand_seed, img, path))
+
+        # Perspective-neutral portrait (same SD load) for the PSHuman head
+        # carve — the candid's single warped view never feeds geometry.
+        portrait_img = None
+        if portrait_out is not None:
+            portrait_img = generator.generate_portrait_one(
+                faceid_embeds, face_image, seed
+            )
 
         # Identity scores while insightface is still loaded.
         from avatar_pipeline.preprocess.face_identity import cosine_similarity
@@ -468,4 +524,31 @@ def build_tpose_reference(
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     Image.fromarray(enhanced).save(out_path)
+
+    if portrait_img is not None:
+        portrait = enhancer.enhance(
+            np.asarray(portrait_img, dtype=np.uint8),
+            candid_embed,
+            extractor,
+            full_frame_upscale=True,
+        )
+        p_emb = extractor.embed(portrait)
+        p_sim = (
+            None if p_emb is None else cosine_similarity(candid_embed, p_emb)
+        )
+        print(
+            f"[tpose-gate] portrait identity after swap+restore: "
+            f"{'n/a' if p_sim is None else f'{p_sim:.3f}'}"
+        )
+        if p_sim is None or p_sim < min_portrait_identity:
+            raise RuntimeError(
+                f"face portrait identity {p_sim} below "
+                f"{min_portrait_identity}; refusing to feed it to the "
+                "head carve"
+            )
+        portrait_out = Path(portrait_out)
+        portrait_out.parent.mkdir(parents=True, exist_ok=True)
+        Image.fromarray(portrait).save(portrait_out)
+        print(f"[tpose-gate] face portrait written to: {portrait_out}")
+
     return out_path

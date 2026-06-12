@@ -28,26 +28,36 @@ def run(
              "OUTPUT_DIR/tpose_reference.png, and run the pipeline on that.",
     ),
     full_pshuman: bool = typer.Option(
-        False,
-        "--full-pshuman",
-        help="Reconstruct body AND head with PSHuman's native full-figure "
-             "SMPL-X-guided pipeline instead of TripoSG + head transplant "
-             "(CODEX migration step 3).",
+        True,
+        "--full-pshuman/--triposg-body",
+        help="PSHuman native full-figure SMPL-X-guided reconstruction for "
+             "body AND head (default). --triposg-body restores the legacy "
+             "TripoSG + head-transplant arm.",
     ),
 ):
+    face_portrait: str | None = None
     if from_candid:
         # Runs and unloads before AvatarPipeline construction so its SD15
         # stack never competes with the pipeline's shared mmgp domain.
         from avatar_pipeline.preprocess.tpose_reference import build_tpose_reference
 
+        portrait_path = (
+            Path(output_dir) / "face_portrait.png" if full_pshuman else None
+        )
         input_image = str(
             build_tpose_reference(
-                input_image, Path(output_dir) / "tpose_reference.png"
+                input_image,
+                Path(output_dir) / "tpose_reference.png",
+                portrait_out=portrait_path,
             )
         )
         print(f"T-pose reference written to: {input_image}")
+        if portrait_path is not None:
+            face_portrait = str(portrait_path)
 
-    pipeline = AvatarPipeline(PipelineConfig(full_pshuman=full_pshuman))
+    pipeline = AvatarPipeline(
+        PipelineConfig(full_pshuman=full_pshuman, face_portrait=face_portrait)
+    )
     result = pipeline.run(input_image=input_image, output_dir=output_dir, snapshot=snapshot)
     print(f"Avatar exported to: {result}")
 

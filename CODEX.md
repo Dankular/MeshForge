@@ -101,11 +101,12 @@ STAGE H — export                                           [implemented]
 2. **Rig validation.** Cheap, immediate win: compare SkinTokens joints
    against the scaffold joints; validate weights. Catches bad rigs today,
    before any reconstruction change.
-3. **PSHuman full-figure.** Run PSHuman on the whole T-pose figure (it is
-   a full-body method; we currently feed it only the head crop). Validate
-   against Sapiens depth/pointmap. Body base switches to PSHuman.
-   First cut shipped behind `--full-pshuman` (full reconstruction +
-   neck-line head colors; depth/pointmap validation still TODO).
+3. **PSHuman full-figure.** DONE — default path. A/B-verified against the
+   TripoSG arm: silhouette IoU 0.973 vs 0.716, anatomical head fraction,
+   5/27 vs 32/52 asymmetric joints. The candid flow also carves the head
+   from a perspective-neutral FaceID portrait (HyperSwap + GFPGAN
+   identity, PSHuman multiview depth) transplanted onto the body.
+   Depth/pointmap validation still TODO.
 4. **TripoSG demotion.** Sapiens-mask-carved supplemental shells (hair,
    shoes, accessories) aligned to the scaffold; drop it from the body path.
 5. **Fusion + cleanup hardening.** Neck-seam weld, self-intersection
