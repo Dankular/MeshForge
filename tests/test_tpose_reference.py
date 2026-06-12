@@ -80,3 +80,24 @@ def test_cli_exposes_from_candid_flag():
     assert result.exit_code == 0
     assert "--from-candid" in result.stdout
     assert "--full-pshuman" in result.stdout
+    assert "--no-clothes" in result.stdout
+
+
+def test_prompt_composition_subject_and_clothing():
+    from avatar_pipeline.preprocess.tpose_reference import (
+        TPoseReferenceGenerator,
+    )
+
+    gen = TPoseReferenceGenerator()
+    assert "a person" in gen.prompt
+    assert "casual fitted clothing" in gen.prompt
+
+    gen.subject = "a woman"
+    assert "a woman" in gen.prompt
+    assert "a woman" in gen.portrait_prompt
+
+    bare = TPoseReferenceGenerator(no_clothes=True)
+    bare.subject = "a man"
+    assert "athletic underwear" in bare.prompt
+    assert "loose clothing" in bare.negative_prompt
+    assert "casual fitted clothing" not in bare.prompt

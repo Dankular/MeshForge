@@ -34,6 +34,14 @@ def run(
              "body AND head (default). --triposg-body restores the legacy "
              "TripoSG + head-transplant arm.",
     ),
+    no_clothes: bool = typer.Option(
+        False,
+        "--no-clothes",
+        help="Generate the T-pose reference in fitted athletic underwear "
+             "instead of clothing — anatomy validation between candidates "
+             "and a clean body shape for the reconstruction (only with "
+             "--from-candid).",
+    ),
 ):
     face_portrait: str | None = None
     if from_candid:
@@ -49,6 +57,7 @@ def run(
                 input_image,
                 Path(output_dir) / "tpose_reference.png",
                 portrait_out=portrait_path,
+                no_clothes=no_clothes,
             )
         )
         print(f"T-pose reference written to: {input_image}")

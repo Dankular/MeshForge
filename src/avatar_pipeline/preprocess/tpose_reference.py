@@ -203,8 +203,8 @@ class TPoseReferenceGenerator:
     # telephoto perspective, and PSHuman's 7-view diffusion + SMPL-X carve
     # then supplies the missing views/depth for corrected face geometry.
     portrait_size = 512
-    portrait_prompt = (
-        "frontal head and shoulders studio portrait photo of a person, "
+    portrait_prompt_template = (
+        "frontal head and shoulders studio portrait photo of {subject}, "
         "looking directly at the camera, neutral expression, hair fully "
         "visible, even soft lighting, plain light gray background, "
         "85mm lens, sharp focus, high detail skin texture"
@@ -213,16 +213,29 @@ class TPoseReferenceGenerator:
         "monochrome, lowres, bad anatomy, worst quality, low quality, "
         "blurry, tilted head, profile, side view, sunglasses, hat, cropped"
     )
-    prompt = (
-        "full body photo of a person standing upright in a T-pose, arms held "
-        "straight out horizontally to the sides, fingers extended, legs "
-        "straight, feet slightly apart, facing the camera, neutral "
-        "expression, casual fitted clothing, plain light gray studio "
+    # {subject} is filled from the identity phase (insightface genderage —
+    # "a woman" / "a man", falling back to "a person"); {clothing} switches
+    # with no_clothes for anatomy-validation generations where loose
+    # clothing would hide the body shape from the proportion validators
+    # and the PSHuman carve.
+    prompt_template = (
+        "full body photo of {subject} standing upright in a T-pose, arms "
+        "held straight out horizontally to the sides, fingers extended, "
+        "legs straight, feet slightly apart, facing the camera, neutral "
+        "expression, {clothing}, plain light gray studio "
         "background, even soft lighting, sharp focus, whole body in frame"
     )
-    negative_prompt = (
+    clothing_default = "casual fitted clothing"
+    clothing_none = (
+        "wearing only plain fitted gray athletic underwear, bare arms and "
+        "bare legs, barefoot"
+    )
+    negative_prompt_base = (
         "monochrome, lowres, bad anatomy, worst quality, low quality, blurry, "
         "cropped, out of frame, arms down, arms bent, hands on hips, sitting"
+    )
+    negative_no_clothes = (
+        ", baggy clothing, loose clothing, dress, skirt, coat, trousers"
     )
 
     def __init__(
@@ -230,13 +243,34 @@ class TPoseReferenceGenerator:
         num_inference_steps: int = 30,
         seed: int = 2023,
         checkpoint_root: Path | None = None,
+        no_clothes: bool = False,
     ) -> None:
         self.num_inference_steps = num_inference_steps
         self.seed = seed
         self.checkpoint_root = checkpoint_root or (_REPO_ROOT / "checkpoints")
+        self.no_clothes = no_clothes
+        self.subject = "a person"  # refined by the identity phase
         self._ip_model = None
         self._face_app = None
         self._device = "cuda" if torch.cuda.is_available() else "cpu"
+
+    @property
+    def prompt(self) -> str:
+        return self.prompt_template.format(
+            subject=self.subject,
+            clothing=self.clothing_none if self.no_clothes
+            else self.clothing_default,
+        )
+
+    @property
+    def negative_prompt(self) -> str:
+        if self.no_clothes:
+            return self.negative_prompt_base + self.negative_no_clothes
+        return self.negative_prompt_base
+
+    @property
+    def portrait_prompt(self) -> str:
+        return self.portrait_prompt_template.format(subject=self.subject)
 
     # ── identity extraction ──────────────────────────────────────────────
     def _get_extractor(self):
@@ -268,6 +302,14 @@ class TPoseReferenceGenerator:
                 "a face identity"
             )
         face, upright_bgr = hit
+        # The identity phase also fixes the prompt subject: buffalo_l's
+        # genderage head already ran inside detect().
+        sex = getattr(face, "sex", None)
+        self.subject = {"F": "a woman", "M": "a man"}.get(sex, "a person")
+        print(
+            f"  identity: sex={sex} age={getattr(face, 'age', '?')} -> "
+            f"prompts use {self.subject!r}"
+        )
         faceid_embeds = torch.from_numpy(face.normed_embedding).unsqueeze(0)
         face_image = face_align.norm_crop(
             upright_bgr, landmark=face.kps, image_size=224
@@ -409,6 +451,7 @@ def build_tpose_reference(
     min_identity: float = 0.15,
     portrait_out: Path | None = None,
     min_portrait_identity: float = 0.4,
+    no_clothes: bool = False,
 ) -> Path:
     """Gated best-of-N reference synthesis.
 
@@ -424,7 +467,7 @@ def build_tpose_reference(
     cand_dir = out_path.parent / "tpose_candidates"
     cand_dir.mkdir(parents=True, exist_ok=True)
 
-    generator = TPoseReferenceGenerator(seed=seed)
+    generator = TPoseReferenceGenerator(seed=seed, no_clothes=no_clothes)
     try:
         image = np.array(Image.open(input_image).convert("RGB"), dtype=np.uint8)
         faceid_embeds, face_image = generator.extract_face_identity(image)
