@@ -353,7 +353,9 @@ class MVAdapterTextureBaker:
         out = torch.where(use, n_t, flat)
         coverage = float(use.float().mean().item())
         print(f"  normal bake: front-view coverage {coverage:.1%}")
-        return np.clip(out.cpu().numpy(), -1.0, 1.0).astype(np.float32)
+        # Same row-convention flip as bake_vertex_attribute: align the
+        # nvdiffrast UV rasterization with the albedo/export convention.
+        return np.clip(out.cpu().numpy(), -1.0, 1.0).astype(np.float32)[::-1].copy()
 
     def bake_vertex_attribute(
         self,
@@ -388,7 +390,13 @@ class MVAdapterTextureBaker:
         if bg.ndim == 0:
             bg = bg.repeat(attr.shape[1])
         baked[~mask] = bg
+        # nvdiffrast rasterizes UV-clip space with row index growing with v;
+        # the albedo atlas (and the GLB export pairing it with these same
+        # uvs) uses the image convention, row = (1 - v) * size. Flip to
+        # match — without this, AO and composited head colors land on
+        # vertically mirrored texels (verified empirically: misbaked
+        # atlases sat at 99.7% inside the FLIPPED chart layout).
         return (
-            baked.detach().cpu().numpy().astype(np.float32),
-            mask.detach().cpu().numpy(),
+            baked.detach().cpu().numpy().astype(np.float32)[::-1].copy(),
+            mask.detach().cpu().numpy()[::-1].copy(),
         )

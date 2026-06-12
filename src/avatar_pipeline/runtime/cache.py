@@ -16,11 +16,11 @@ import numpy as np
 # Bump when the corresponding stage's semantics change.
 MV_VIEWS_VERSION = 3        # MV-Adapter diffusion, Space-exact (15 steps)
 TEXTURED_MESH_VERSION = 1   # reference TexturePipeline (UVAtlas unwrap + texture)
-NORMAL_BAKE_VERSION = 1     # tangent-space front-view normal bake
-AO_BAKE_VERSION = 1         # hemispheric raycast AO
+NORMAL_BAKE_VERSION = 2     # v2: atlas row convention aligned with albedo
+AO_BAKE_VERSION = 2         # v2: atlas row convention aligned with albedo
 RIG_VERSION = 1             # SkinTokens skeleton + weights
 HEAD_DETAIL_VERSION = 2     # PSHuman head generation; colored OBJ required
-HEAD_COMPOSITE_VERSION = 2  # PSHuman colors matched by position post-UVAtlas
+HEAD_COMPOSITE_VERSION = 3  # v3: composite mask row convention aligned
 
 
 def content_key(*parts: Any) -> str:

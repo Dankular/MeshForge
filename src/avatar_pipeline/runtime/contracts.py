@@ -12,7 +12,9 @@ from avatar_pipeline.models.mesh import BakedTextures, RiggedMesh
 # view inpaint, poisson reprojection, 3D-nearest fill, PSHuman head colors.
 # v5: texturing via the reference TexturePipeline (UVAtlas unwrap inside),
 # Space-exact; the textured mesh geometry comes from the texture stage.
-TEXTURE_SCHEMA_VERSION = 5
+# v6: AO / normal / head-composite atlases flipped to the albedo row
+# convention (they were vertically mirrored against the UV charts).
+TEXTURE_SCHEMA_VERSION = 6
 MIN_ALBEDO_ACTIVE_RATIO = 0.02
 ALBEDO_ACTIVE_THRESHOLD = 1.0 / 255.0
 

@@ -32,7 +32,9 @@ def _textures(albedo: np.ndarray | None = None) -> BakedTextures:
 
 
 def test_texture_schema_version_is_explicit():
-    assert TEXTURE_SCHEMA_VERSION == 5
+    # v6: AO / normal / head-composite atlases aligned to the albedo row
+    # convention.
+    assert TEXTURE_SCHEMA_VERSION == 6
 
 
 def test_texture_contract_accepts_float_maps_with_matching_resolution():
