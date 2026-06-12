@@ -33,6 +33,11 @@ python -m avatar_pipeline.main <input.png> <output_dir> --snapshot <cache.pkl>
 missing head detail, inward winding) upgrade themselves on load without
 rerunning TripoSG.
 
+`--full-pshuman` reconstructs body AND head with PSHuman's native
+full-figure SMPL-X-guided pipeline (CODEX migration step 3) — no TripoSG,
+no head transplant; PSHuman's own vertex colors above the detected neck
+line still drive the head region of the atlas.
+
 `--from-candid` accepts a candid photo (face or partial face+body) instead
 of a T-pose reference: IP-Adapter FaceID PlusV2 (external/IP-Adapter, weights
 from h94/IP-Adapter-FaceID) + an OpenPose ControlNet conditioned on a

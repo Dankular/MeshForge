@@ -70,6 +70,10 @@ _TEXTURE_SCHEMA_KEY = "texture_schema_version"
 class PipelineConfig:
     uv_size: int = 2048
     checkpoint_root: str = str(_REPO_ROOT / "checkpoints")
+    # Use PSHuman's native full-figure reconstruction (SMPL-X-guided) for
+    # body AND head, skipping TripoSG and the head transplant entirely
+    # (CODEX migration step 3).
+    full_pshuman: bool = False
 
 
 # ── UV unwrap ─────────────────────────────────────────────────────────────────
@@ -456,6 +460,72 @@ class AvatarPipeline:
             )
         return textures, textured_body
 
+    def _generate_full_body(
+        self,
+        processed: np.ndarray,
+        state: dict,
+        work_dir: str,
+    ) -> Mesh:
+        """PSHuman full-figure mesh (body + head in one piece), cached by the
+        processed image content. The mesh is decimated to body density,
+        repaired to UVAtlas cleanliness, and wound outward. PSHuman's own
+        vertex colors above the neck line feed the head-color composite,
+        exactly like the transplant path (the face is only a few dozen
+        reference pixels in the full-figure bake views)."""
+        from avatar_pipeline.fusion.head_fusion import (
+            _neck_line,
+            load_decimated_colored,
+            uvatlas_defects,
+        )
+        from avatar_pipeline.runtime.cache import FULL_BODY_VERSION
+
+        full_key = content_key(
+            processed,
+            f"seed={self.head_detail.seed}",
+            f"steps={self.head_detail.num_inference_steps}",
+            f"v{FULL_BODY_VERSION}",
+        )
+        full_obj = artifact_get(state, "full_body_obj", full_key)
+        if full_obj is not None and Path(full_obj).exists():
+            print("  [cache] reusing PSHuman full-figure mesh")
+        else:
+            full_obj = self.head_detail.generate_full(processed, work_dir=work_dir)
+            artifact_put(state, "full_body_obj", full_key, full_obj)
+
+        tm, colors = load_decimated_colored(full_obj, target_faces=110_000)
+        body = Mesh(
+            vertices=np.asarray(tm.vertices, dtype=np.float32),
+            faces=np.asarray(tm.faces, dtype=np.int32),
+        )
+        body, _ = _ensure_outward_winding(body)
+        defects = uvatlas_defects(body.vertices, body.faces)
+        if any(defects.values()):
+            raise RuntimeError(
+                f"PSHuman full-figure mesh is not UVAtlas-clean: {defects}"
+            )
+        print(
+            f"  PSHuman full figure: {len(body.vertices):,} verts, "
+            f"{len(body.faces):,} faces, colors: {colors is not None}"
+        )
+
+        neck_y = _neck_line(np.asarray(body.vertices, dtype=np.float64))
+        if colors is not None and neck_y is not None:
+            head_sel = body.vertices[:, 1] >= neck_y
+            state["head_colors"] = colors[head_sel].astype(np.float32)
+            state["head_verts"] = body.vertices[head_sel].astype(np.float32)
+            print(
+                f"  head-color region above neck y={neck_y:.3f}: "
+                f"{int(head_sel.sum()):,} verts"
+            )
+        else:
+            state.pop("head_colors", None)
+            state.pop("head_verts", None)
+
+        state["body_fused"] = body
+        state["full_pshuman"] = True
+        state["head_detail"] = True  # nothing left to transplant
+        return body
+
     def _refuse_head_from_cache(
         self,
         state: dict,
@@ -594,7 +664,16 @@ class AvatarPipeline:
             body_fused = state.get("body_fused")
 
             rebuild_reason = None
-            if self._head_detail_is_stale(state) or (
+            if state.get("full_pshuman"):
+                # No transplant in this mode; if the pre-unwrap mesh is gone
+                # rebuild it from the cached full-figure artifact.
+                if body is None and body_fused is None:
+                    body_fused = self._generate_full_body(
+                        processed, state,
+                        work_dir=str(Path(output_dir) / "pshuman_full"),
+                    )
+                    rebuild_reason = "full-figure mesh rebuilt"
+            elif self._head_detail_is_stale(state) or (
                 body is None and body_fused is None
             ):
                 # The head artifact is missing or its content key is stale
@@ -616,7 +695,12 @@ class AvatarPipeline:
             else:
                 print(f"[snapshot] rebaking textures: {rebuild_reason}")
                 if body_fused is None:
-                    if state.get("body_prefusion") is not None:
+                    if state.get("full_pshuman"):
+                        body_fused = self._generate_full_body(
+                            processed, state,
+                            work_dir=str(Path(output_dir) / "pshuman_full"),
+                        )
+                    elif state.get("body_prefusion") is not None:
                         # Snapshot predates body_fused: rebuild the pre-unwrap
                         # mesh from cached parts (PSHuman head hits its cache).
                         print("[snapshot] rebuilding pre-unwrap fused mesh")
@@ -661,25 +745,34 @@ class AvatarPipeline:
                 _TEXTURE_SCHEMA_KEY: TEXTURE_SCHEMA_VERSION,
             }
 
-            # 3. TripoSG body mesh
-            print("[3/8] TripoSG ...")
-            body = self.generator.generate(
-                image=cond_img, semantic_map=seg, pose_data=pose,
-                depth=depth, normals=hi_nrm,
-            )
-            # body = Mesh(vertices, faces) — no UVs yet
+            if self.config.full_pshuman:
+                # 3-5. PSHuman full-figure reconstruction: body + head in one
+                # SMPL-X-guided piece — no TripoSG, no transplant.
+                print("[3-5/8] PSHuman full-figure reconstruction ...")
+                body = self._generate_full_body(
+                    processed, state,
+                    work_dir=str(Path(output_dir) / "pshuman_full"),
+                )
+            else:
+                # 3. TripoSG body mesh
+                print("[3/8] TripoSG ...")
+                body = self.generator.generate(
+                    image=cond_img, semantic_map=seg, pose_data=pose,
+                    depth=depth, normals=hi_nrm,
+                )
+                # body = Mesh(vertices, faces) — no UVs yet
 
-            # 4. PSHuman head detail + pre-rig fusion
-            print("[4/8] PSHuman head detail ...")
-            head_obj = self._generate_head_detail(
-                processed, seg, state, work_dir=str(Path(output_dir) / "pshuman")
-            )
+                # 4. PSHuman head detail + pre-rig fusion
+                print("[4/8] PSHuman head detail ...")
+                head_obj = self._generate_head_detail(
+                    processed, seg, state, work_dir=str(Path(output_dir) / "pshuman")
+                )
 
-            # 5. Pre-rig head fusion (raw geometry; the UV unwrap happens
-            # inside the reference TexturePipeline in the next stage)
-            print("[5/8] Head fusion ...")
-            body = _fuse_head(body, head_obj, state)  # also sets body_fused
-            state["head_detail"] = True
+                # 5. Pre-rig head fusion (raw geometry; the UV unwrap happens
+                # inside the reference TexturePipeline in the next stage)
+                print("[5/8] Head fusion ...")
+                body = _fuse_head(body, head_obj, state)  # also sets body_fused
+                state["head_detail"] = True
 
             # 6. Texture: MV-Adapter views + reference TexturePipeline
             # (UVAtlas unwrap, view upscale, view inpaint) — Space-exact.

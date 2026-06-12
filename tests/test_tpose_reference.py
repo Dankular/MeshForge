@@ -66,3 +66,4 @@ def test_cli_exposes_from_candid_flag():
     result = CliRunner().invoke(app, ["--help"])
     assert result.exit_code == 0
     assert "--from-candid" in result.stdout
+    assert "--full-pshuman" in result.stdout

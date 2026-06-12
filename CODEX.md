@@ -104,6 +104,8 @@ STAGE H — export                                           [implemented]
 3. **PSHuman full-figure.** Run PSHuman on the whole T-pose figure (it is
    a full-body method; we currently feed it only the head crop). Validate
    against Sapiens depth/pointmap. Body base switches to PSHuman.
+   First cut shipped behind `--full-pshuman` (full reconstruction +
+   neck-line head colors; depth/pointmap validation still TODO).
 4. **TripoSG demotion.** Sapiens-mask-carved supplemental shells (hair,
    shoes, accessories) aligned to the scaffold; drop it from the body path.
 5. **Fusion + cleanup hardening.** Neck-seam weld, self-intersection

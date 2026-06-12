@@ -106,6 +106,26 @@ class PSHumanHeadGenerator:
         work_dir: str,
     ) -> str:
         """Run PSHuman on the head crop. Returns the colored OBJ path."""
+        crop = extract_head_crop_rgba(processed, seg_labels)
+        return self._run_case(crop, "head", work_dir)
+
+    def generate_full(
+        self,
+        processed: np.ndarray,    # float32 (H, W, 4) RGBA in [0, 1]
+        work_dir: str,
+    ) -> str:
+        """Run PSHuman on the full figure (its native use: SMPL-X-guided
+        single-image human reconstruction). Returns the colored OBJ path."""
+        rgba = np.clip(processed * 255.0, 0, 255).astype(np.uint8)
+        return self._run_case(rgba, "body", work_dir)
+
+    def _run_case(
+        self,
+        rgba: np.ndarray,         # uint8 (H, W, 4) RGBA
+        scene: str,
+        work_dir: str,
+    ) -> str:
+        """7-view unclip diffusion + SMPL-X carve on one RGBA image."""
         if self._pipe is None:
             raise RuntimeError("PSHumanHeadGenerator is not loaded")
         _bootstrap_pshuman_imports()
@@ -124,8 +144,7 @@ class PSHumanHeadGenerator:
         work = Path(work_dir).resolve()
         img_dir = work / "input"
         img_dir.mkdir(parents=True, exist_ok=True)
-        crop = extract_head_crop_rgba(processed, seg_labels)
-        Image.fromarray(crop, "RGBA").save(img_dir / "head.png")
+        Image.fromarray(rgba, "RGBA").save(img_dir / f"{scene}.png")
 
         # PSHuman's utils.misc registers OmegaConf resolvers at import; in
         # the integrated process SkinTokens' loader already registered some
@@ -238,5 +257,5 @@ class PSHumanHeadGenerator:
             )
         del econdata, carving
         torch.cuda.empty_cache()
-        print(f"  PSHuman head mesh: {hits[-1]}")
+        print(f"  PSHuman {scene} mesh: {hits[-1]}")
         return str(hits[-1])

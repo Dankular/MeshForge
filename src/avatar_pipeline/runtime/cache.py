@@ -21,6 +21,7 @@ AO_BAKE_VERSION = 2         # v2: atlas row convention aligned with albedo
 RIG_VERSION = 1             # SkinTokens skeleton + weights
 HEAD_DETAIL_VERSION = 2     # PSHuman head generation; colored OBJ required
 HEAD_COMPOSITE_VERSION = 3  # v3: composite mask row convention aligned
+FULL_BODY_VERSION = 1       # PSHuman full-figure reconstruction (--full-pshuman)
 
 
 def content_key(*parts: Any) -> str:

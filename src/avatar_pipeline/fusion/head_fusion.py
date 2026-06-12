@@ -74,6 +74,66 @@ def _neck_line(verts: np.ndarray, n_bins: int = 100) -> float | None:
     return None
 
 
+def load_decimated_colored(
+    mesh_path: str, target_faces: int
+) -> tuple[trimesh.Trimesh, np.ndarray | None]:
+    """Load a PSHuman colored OBJ, decimated to *target_faces* and repaired
+    to UVAtlas cleanliness. Vertex colors (float32 [0,1]) ride along.
+
+    Quadric collapse leaves non-manifold edges, bowtie vertices, and
+    duplicate faces behind, all of which the reference TexturePipeline's
+    UVAtlas unwrap hard-rejects. The repair preserves vertex positions
+    (edge/dup repair drops faces, vertex repair splits verts in place), so
+    position-exact color matching downstream is unaffected. One pass is not
+    always enough (duplicate faces mask bowties from the vertex repair), so
+    iterate against the same defect predicates UVAtlas enforces.
+    """
+    mesh: trimesh.Trimesh = trimesh.load(mesh_path, force="mesh", process=False)
+    colors = None
+    if mesh.visual.kind == "vertex" and mesh.visual.vertex_colors is not None:
+        colors = (
+            np.asarray(mesh.visual.vertex_colors, dtype=np.float32)[:, :3] / 255.0
+        )
+    if len(mesh.faces) <= target_faces:
+        return mesh, colors
+
+    import pymeshlab
+
+    mesh_kwargs = {
+        "vertex_matrix": np.asarray(mesh.vertices, dtype=np.float64),
+        "face_matrix": np.asarray(mesh.faces, dtype=np.int32),
+    }
+    if colors is not None:
+        mesh_kwargs["v_color_matrix"] = np.hstack(
+            [colors.astype(np.float64),
+             np.ones((len(colors), 1), dtype=np.float64)]
+        )
+    ms = pymeshlab.MeshSet()
+    ms.add_mesh(pymeshlab.Mesh(**mesh_kwargs))
+    ms.meshing_merge_close_vertices()
+    ms.meshing_decimation_quadric_edge_collapse(targetfacenum=target_faces)
+    for _ in range(3):
+        ms.meshing_repair_non_manifold_edges()
+        ms.meshing_remove_duplicate_faces()
+        ms.meshing_remove_null_faces()
+        ms.meshing_repair_non_manifold_vertices()
+        ms.meshing_remove_unreferenced_vertices()
+        cur = ms.current_mesh()
+        defects = uvatlas_defects(cur.vertex_matrix(), cur.face_matrix())
+        if not any(defects.values()):
+            break
+        print(f"[head_fusion] repair pass left {defects}; retrying")
+    dec = ms.current_mesh()
+    if colors is not None:
+        colors = dec.vertex_color_matrix()[:, :3].astype(np.float32)
+    out = trimesh.Trimesh(
+        vertices=dec.vertex_matrix().astype(np.float32),
+        faces=dec.face_matrix().astype(np.int64),
+        process=False,
+    )
+    return out, colors
+
+
 def fuse_head_prerig(
     body: Mesh,
     head_mesh_path: str,
@@ -94,64 +154,14 @@ def fuse_head_prerig(
 
     Returns (fused_mesh_without_UVs, head_vertex_colors | None, head_vert_start).
     """
-    head: trimesh.Trimesh = trimesh.load(head_mesh_path, force="mesh", process=False)
-    head_colors = None
-    if head.visual.kind == "vertex" and head.visual.vertex_colors is not None:
-        head_colors = (
-            np.asarray(head.visual.vertex_colors, dtype=np.float32)[:, :3] / 255.0
-        )
+    # The carve outputs ~700k faces; decimate to the same density class as
+    # the TripoSG body (quadric edge collapse — the same method TripoSG's
+    # own inference uses for its meshes). Vertex colors ride along.
+    head, head_colors = load_decimated_colored(head_mesh_path, head_target_faces)
     print(
         f"[head_fusion] PSHuman head: {len(head.vertices):,} verts, "
         f"vertex colors: {head_colors is not None}"
     )
-
-    # The carve outputs ~700k faces; decimate to the same density class as
-    # the TripoSG body (quadric edge collapse — the same method TripoSG's
-    # own inference uses for its meshes). Vertex colors ride along.
-    if len(head.faces) > head_target_faces:
-        import pymeshlab
-
-        mesh_kwargs = {
-            "vertex_matrix": np.asarray(head.vertices, dtype=np.float64),
-            "face_matrix": np.asarray(head.faces, dtype=np.int32),
-        }
-        if head_colors is not None:
-            mesh_kwargs["v_color_matrix"] = np.hstack(
-                [head_colors.astype(np.float64),
-                 np.ones((len(head_colors), 1), dtype=np.float64)]
-            )
-        ms = pymeshlab.MeshSet()
-        ms.add_mesh(pymeshlab.Mesh(**mesh_kwargs))
-        ms.meshing_merge_close_vertices()
-        ms.meshing_decimation_quadric_edge_collapse(targetfacenum=head_target_faces)
-        # Quadric collapse leaves non-manifold edges, bowtie vertices, and
-        # duplicate faces behind, and the reference TexturePipeline's UVAtlas
-        # unwrap hard-rejects all of them ("Non-manifold mesh"). Repair
-        # preserves vertex positions (edge/dup repair drops faces, vertex
-        # repair splits verts in place), so the position-exact head-color
-        # matching downstream is unaffected. One pass is not always enough
-        # (duplicate faces mask bowties from the vertex repair), so iterate
-        # against the same defect predicates UVAtlas enforces.
-        for _ in range(3):
-            ms.meshing_repair_non_manifold_edges()
-            ms.meshing_remove_duplicate_faces()
-            ms.meshing_remove_null_faces()
-            ms.meshing_repair_non_manifold_vertices()
-            ms.meshing_remove_unreferenced_vertices()
-            cur = ms.current_mesh()
-            defects = uvatlas_defects(cur.vertex_matrix(), cur.face_matrix())
-            if not any(defects.values()):
-                break
-            print(f"[head_fusion] head repair pass left {defects}; retrying")
-        dec = ms.current_mesh()
-        if head_colors is not None:
-            head_colors = dec.vertex_color_matrix()[:, :3].astype(np.float32)
-        head = trimesh.Trimesh(
-            vertices=dec.vertex_matrix().astype(np.float32),
-            faces=dec.face_matrix().astype(np.int64),
-            process=False,
-        )
-        print(f"[head_fusion] decimated head: {len(head.vertices):,} verts")
 
     body_tm = trimesh.Trimesh(
         vertices=body.vertices.astype(np.float64),
