@@ -531,17 +531,22 @@ class AvatarPipeline:
             print(f"[snapshot] loading cached pre-rig state from {snap_path}")
             with open(snap_path, "rb") as f:
                 state = pickle.load(f)
-            processed, seg, pose, depth, hi_nrm, pointmap, body = (
+            processed, seg, pose, depth, hi_nrm, pointmap = (
                 state["processed"], state["seg"], state["pose"], state["depth"],
-                state["hi_nrm"], state["pointmap"], state["body"],
+                state["hi_nrm"], state["pointmap"],
             )
-            body, flipped = _ensure_outward_winding(body)
-            if flipped:
-                print("[snapshot] flipped cached mesh winding to outward orientation")
-                state["body"] = body
+            # A snapshot persisted mid-bake (crash recovery) has no fused
+            # body yet — only body_prefusion. Re-fuse below; the PSHuman
+            # head artifact is cached, so no regeneration happens.
+            body = state.get("body")
+            if body is not None:
+                body, flipped = _ensure_outward_winding(body)
+                if flipped:
+                    print("[snapshot] flipped cached mesh winding to outward orientation")
+                    state["body"] = body
 
             rebuild_reason = None
-            if self._head_detail_is_stale(state):
+            if body is None or self._head_detail_is_stale(state):
                 # The head artifact is missing or its content key is stale
                 # (new inputs or a HEAD_DETAIL_VERSION bump). Re-fuse from
                 # the pre-fusion body — never onto an already-fused mesh.
@@ -626,6 +631,9 @@ class AvatarPipeline:
             print("[5/8] Head fusion ...")
             body = _fuse_head(body, head_obj, state)
             state["head_detail"] = True
+            # Persist the fused body now: mid-bake crash snapshots must be
+            # resumable, and _bake_textures only sets state["body"] at the end.
+            state["body"] = body
 
             # 6. Texture: MV-Adapter views + reference TexturePipeline
             # (UVAtlas unwrap, view upscale, view inpaint) — Space-exact.

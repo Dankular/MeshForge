@@ -65,6 +65,14 @@ def fuse_head_prerig(
         ms.add_mesh(pymeshlab.Mesh(**mesh_kwargs))
         ms.meshing_merge_close_vertices()
         ms.meshing_decimation_quadric_edge_collapse(targetfacenum=head_target_faces)
+        # Quadric collapse leaves non-manifold edges/vertices behind, and the
+        # reference TexturePipeline's UVAtlas unwrap hard-rejects them
+        # ("Non-manifold mesh"). Repair preserves vertex positions (edge
+        # repair drops faces, vertex repair splits verts), so the
+        # position-exact head-color matching downstream is unaffected.
+        ms.meshing_repair_non_manifold_edges()
+        ms.meshing_repair_non_manifold_vertices()
+        ms.meshing_remove_unreferenced_vertices()
         dec = ms.current_mesh()
         if head_colors is not None:
             head_colors = dec.vertex_color_matrix()[:, :3].astype(np.float32)
@@ -127,4 +135,19 @@ def fuse_head_prerig(
         f"[head_fusion] combined: {len(combined_verts):,} verts, "
         f"{len(combined_faces):,} faces"
     )
+
+    # The reference TexturePipeline runs UVAtlas with preprocess=False (to
+    # keep vertex positions exact for head-color matching) and UVAtlas
+    # hard-rejects non-manifold meshes — catch it here, where the cause is
+    # attributable, not 20 minutes later inside the bake.
+    edges = trimesh.Trimesh(
+        vertices=combined_verts, faces=combined_faces, process=False
+    ).edges_sorted
+    _, edge_counts = np.unique(edges, axis=0, return_counts=True)
+    nonmanifold = int((edge_counts > 2).sum())
+    if nonmanifold:
+        raise RuntimeError(
+            f"[head_fusion] fused mesh has {nonmanifold} non-manifold edges; "
+            "the UVAtlas unwrap will reject it"
+        )
     return fused, head_colors, len(verts)
