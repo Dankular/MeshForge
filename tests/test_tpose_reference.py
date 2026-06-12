@@ -13,7 +13,14 @@ L_HIP, L_KNE, L_ANK = 11, 12, 13
 
 
 def test_tpose_keypoints_geometry():
-    width, height = 512, 768
+    # The skeleton's normalized coords are anatomical only at the canvas
+    # aspect the generator actually uses — pin to its real dimensions.
+    from avatar_pipeline.preprocess.tpose_reference import (
+        TPoseReferenceGenerator,
+    )
+
+    width = TPoseReferenceGenerator.width
+    height = TPoseReferenceGenerator.height
     pts = tpose_keypoints(width, height)
 
     assert pts.shape == (18, 2)
@@ -30,10 +37,16 @@ def test_tpose_keypoints_geometry():
     assert pts[R_WRI, 0] < pts[R_SHO, 0] < pts[NECK, 0]
     assert pts[L_WRI, 0] > pts[L_SHO, 0] > pts[NECK, 0]
 
-    # Edge margin: the model paints hands beyond the wrists, so wrists must
-    # stay >=20% from the frame edge or fingertips get clipped.
-    assert pts[R_WRI, 0] >= 0.20 * width
-    assert pts[L_WRI, 0] <= 0.80 * width
+    # Edge margin: the model paints hands beyond the wrists; keep clearance.
+    assert pts[R_WRI, 0] >= 0.08 * width
+    assert pts[L_WRI, 0] <= 0.92 * width
+
+    # Anatomical wingspan: wrist-to-wrist span ~0.75-0.95 of the
+    # nose-to-ankle stature, or the skeleton encodes T-rex arms and
+    # ControlNet faithfully reproduces them.
+    span = pts[L_WRI, 0] - pts[R_WRI, 0]
+    stature = pts[R_ANK, 1] - pts[0, 1]  # nose is index 0
+    assert 0.75 <= span / stature <= 0.95
 
     # Legs descend hip -> knee -> ankle on both sides.
     for hip, knee, ankle in ((R_HIP, R_KNE, R_ANK), (L_HIP, L_KNE, L_ANK)):

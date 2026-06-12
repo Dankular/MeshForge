@@ -43,18 +43,22 @@ def _bootstrap_ip_adapter_imports() -> None:
 
 # ── Synthetic OpenPose T-pose skeleton ───────────────────────────────────────
 #
-# 18-keypoint COCO body in OpenPose order, normalized (x, y). Arms straight
-# out at shoulder height (the defining T-pose property), legs straight and
-# slightly apart, figure centered with headroom and foot margin.
+# 18-keypoint COCO body in OpenPose order, normalized (x, y) on a 640x768
+# canvas. Anatomical T-pose proportions: wrist-to-wrist span ~0.84 of
+# standing height (fingertip span ~= height once hands extend past the
+# wrists). The earlier 512-wide canvas could not fit a proportional
+# wingspan, so the skeleton encoded T-rex arms and ControlNet faithfully
+# reproduced them — and the model's attempts to draw anatomically longer
+# arms past the too-short wrist marks were the original fingertip clipping.
 _TPOSE_KEYPOINTS_NORM: tuple[tuple[float, float], ...] = (
     (0.500, 0.130),  # 0  nose
     (0.500, 0.230),  # 1  neck
-    (0.420, 0.230),  # 2  R shoulder
-    (0.320, 0.230),  # 3  R elbow
-    (0.220, 0.230),  # 4  R wrist — keep >=20% edge margin: the model
-    (0.580, 0.230),  # 5  L shoulder      paints hands beyond the wrists,
-    (0.680, 0.230),  # 6  L elbow         and clipped fingertips break the
-    (0.780, 0.230),  # 7  L wrist         downstream rembg silhouette
+    (0.400, 0.230),  # 2  R shoulder
+    (0.252, 0.230),  # 3  R elbow
+    (0.105, 0.230),  # 4  R wrist
+    (0.600, 0.230),  # 5  L shoulder
+    (0.748, 0.230),  # 6  L elbow
+    (0.895, 0.230),  # 7  L wrist
     (0.455, 0.510),  # 8  R hip
     (0.448, 0.700),  # 9  R knee
     (0.442, 0.880),  # 10 R ankle
@@ -127,28 +131,33 @@ def tpose_pose_score(
     The defining property: the whole arm chain (elbows + wrists) sits on the
     shoulder line. arm_dev is the worst arm-joint deviation from that line,
     normalized by torso length; spread requires wrists wider apart than the
-    shoulders; upright requires hips below shoulders (image y grows down).
+    shoulders; span_ratio requires an anatomical wingspan (wrist-to-wrist
+    ~0.75-1.05 of nose-to-ankle height — catches T-rex arms that are
+    perfectly horizontal but half the proper length); upright requires hips
+    below shoulders (image y grows down).
     """
     idx = {name: i for i, name in enumerate(joint_names)}
 
     def kp(name: str) -> np.ndarray:
         return keypoints[idx[name]]
 
+    invalid = {"valid": False, "conf_ok": False, "arm_dev": float("inf"),
+               "spread": False, "upright": False, "span_ratio": 0.0}
     required = (
-        "left_shoulder", "right_shoulder", "left_elbow", "right_elbow",
-        "left_wrist", "right_wrist", "left_hip", "right_hip",
+        "nose", "left_shoulder", "right_shoulder", "left_elbow",
+        "right_elbow", "left_wrist", "right_wrist", "left_hip", "right_hip",
+        "left_ankle", "right_ankle",
     )
-    conf_ok = all(float(kp(n)[2]) >= min_conf for n in required)
-    if not conf_ok:
-        return {"valid": False, "conf_ok": False, "arm_dev": float("inf"),
-                "spread": False, "upright": False}
+    if not all(float(kp(n)[2]) >= min_conf for n in required):
+        return invalid
 
     shoulder_y = (float(kp("left_shoulder")[1]) + float(kp("right_shoulder")[1])) / 2
     hip_y = (float(kp("left_hip")[1]) + float(kp("right_hip")[1])) / 2
+    ankle_y = (float(kp("left_ankle")[1]) + float(kp("right_ankle")[1])) / 2
     torso = abs(hip_y - shoulder_y)
-    if torso < 1.0:
-        return {"valid": False, "conf_ok": True, "arm_dev": float("inf"),
-                "spread": False, "upright": False}
+    stature = abs(ankle_y - float(kp("nose")[1]))
+    if torso < 1.0 or stature < 1.0:
+        return {**invalid, "conf_ok": True}
 
     arm_dev = max(
         abs(float(kp(n)[1]) - shoulder_y)
@@ -159,13 +168,19 @@ def tpose_pose_score(
         float(kp("left_shoulder")[0]) - float(kp("right_shoulder")[0])
     )
     spread = wrist_span > 2.0 * shoulder_span
+    # nose-to-ankle underestimates full stature by the head/foot caps;
+    # wrist span underestimates fingertip span by the hands — the ratio of
+    # the two truncated spans still lands near 0.9 for real anatomy.
+    span_ratio = wrist_span / stature
+    span_ok = 0.75 <= span_ratio <= 1.05
     upright = hip_y > shoulder_y
 
     return {
-        "valid": arm_dev <= arm_tolerance and spread and upright,
+        "valid": arm_dev <= arm_tolerance and spread and span_ok and upright,
         "conf_ok": True,
         "arm_dev": float(arm_dev),
         "spread": bool(spread),
+        "span_ratio": float(span_ratio),
         "upright": bool(upright),
     }
 
@@ -180,7 +195,7 @@ class TPoseReferenceGenerator:
     image_encoder_path = "laion/CLIP-ViT-H-14-laion2B-s32B-b79K"
     controlnet_model = "lllyasviel/control_v11p_sd15_openpose"
 
-    width = 512
+    width = 640   # wide enough for an anatomical wingspan (see skeleton)
     height = 768
     # Perspective-neutral close-up for the PSHuman head carve: a candid is a
     # single warped view (selfie-distance perspective bakes a distorted face
@@ -451,6 +466,11 @@ def build_tpose_reference(
     from avatar_pipeline.sapiens.pose_estimation import PoseEstimator
 
     pose_estimator = PoseEstimator()
+    pose_estimator.load_pretrained(None)
+    if torch.cuda.is_available():
+        # Standalone use: no mmgp domain manages this model, so it stays on
+        # CPU after loading while estimate() sends inputs to CUDA.
+        pose_estimator._model = pose_estimator._model.cuda()
     pose_scores = []
     for _, img, _ in candidates:
         pose_data = pose_estimator.estimate(np.asarray(img, dtype=np.uint8))
