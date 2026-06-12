@@ -22,16 +22,18 @@ _DET_SIZES = (640, 320, 160)
 
 
 class FaceIdentityExtractor:
-    def __init__(self) -> None:
+    def __init__(self, providers: list[str] | None = None) -> None:
         self._app = None
+        self._providers = providers or [
+            "CUDAExecutionProvider", "CPUExecutionProvider",
+        ]
 
     def _get_app(self):
         if self._app is None:
             from insightface.app import FaceAnalysis
 
             self._app = FaceAnalysis(
-                name="buffalo_l",
-                providers=["CUDAExecutionProvider", "CPUExecutionProvider"],
+                name="buffalo_l", providers=self._providers
             )
             self._app.prepare(ctx_id=0, det_size=(640, 640))
         return self._app

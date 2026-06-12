@@ -297,17 +297,27 @@ class TPoseReferenceGenerator:
                 "a face identity"
             )
         face, upright_bgr = hit
-        # The identity phase also fixes the prompt subject: buffalo_l's
-        # genderage head already ran inside detect().
-        sex = getattr(face, "sex", None)
-        self.subject = {"F": "a woman", "M": "a man"}.get(sex, "a person")
-        print(
-            f"  identity: sex={sex} age={getattr(face, 'age', '?')} -> "
-            f"prompts use {self.subject!r}"
-        )
         faceid_embeds = torch.from_numpy(face.normed_embedding).unsqueeze(0)
         face_image = face_align.norm_crop(
             upright_bgr, landmark=face.kps, image_size=224
+        )
+        # The identity phase also fixes the prompt subject — but genderage
+        # on the RAW detection is unreliable for small/tilted faces (a
+        # lying-down candid read as M/50 and produced a male-bodied
+        # reference). Re-read sex/age from the aligned upright crop, the
+        # normalized input the genderage head expects.
+        sex_source = face
+        aligned_hit = self._get_extractor().detect(
+            np.ascontiguousarray(face_image[:, :, ::-1])
+        )
+        if aligned_hit is not None:
+            sex_source = aligned_hit[0]
+        sex = getattr(sex_source, "sex", None)
+        self.subject = {"F": "a woman", "M": "a man"}.get(sex, "a person")
+        print(
+            f"  identity: sex={sex} age={getattr(sex_source, 'age', '?')} "
+            f"(aligned-crop read: {aligned_hit is not None}) -> "
+            f"prompts use {self.subject!r}"
         )
         return faceid_embeds, face_image
 
