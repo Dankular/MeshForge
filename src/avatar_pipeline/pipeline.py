@@ -507,6 +507,9 @@ class AvatarPipeline:
             f"  PSHuman full figure: {len(body.vertices):,} verts, "
             f"{len(body.faces):,} faces, colors: {colors is not None}"
         )
+        from avatar_pipeline.runtime.validators import print_proportion_report
+
+        print_proportion_report("PSHuman full figure", body.vertices)
 
         neck_y = _neck_line(np.asarray(body.vertices, dtype=np.float64))
         if colors is not None and neck_y is not None:
@@ -761,6 +764,11 @@ class AvatarPipeline:
                     depth=depth, normals=hi_nrm,
                 )
                 # body = Mesh(vertices, faces) — no UVs yet
+                from avatar_pipeline.runtime.validators import (
+                    print_proportion_report,
+                )
+
+                print_proportion_report("TripoSG body", body.vertices)
 
                 # 4. PSHuman head detail + pre-rig fusion
                 print("[4/8] PSHuman head detail ...")
@@ -804,6 +812,9 @@ class AvatarPipeline:
                 self._write_snapshot(snap_path, state)
         else:
             print("  [cache] reusing SkinTokens rig")
+        from avatar_pipeline.runtime.validators import print_rig_report
+
+        print_rig_report(rigged)
 
         # 8. Export
         print("[8/8] Exporting GLB ...")

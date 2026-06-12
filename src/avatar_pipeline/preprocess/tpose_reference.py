@@ -114,6 +114,62 @@ def render_tpose_skeleton(width: int, height: int) -> Image.Image:
     return Image.fromarray(canvas)
 
 
+# ── T-pose validity scoring (pure; testable without models) ─────────────────
+
+def tpose_pose_score(
+    keypoints: np.ndarray,
+    joint_names: list[str],
+    min_conf: float = 0.3,
+    arm_tolerance: float = 0.15,
+) -> dict:
+    """Score COCO-17 pixel keypoints for strict-T-pose validity.
+
+    The defining property: the whole arm chain (elbows + wrists) sits on the
+    shoulder line. arm_dev is the worst arm-joint deviation from that line,
+    normalized by torso length; spread requires wrists wider apart than the
+    shoulders; upright requires hips below shoulders (image y grows down).
+    """
+    idx = {name: i for i, name in enumerate(joint_names)}
+
+    def kp(name: str) -> np.ndarray:
+        return keypoints[idx[name]]
+
+    required = (
+        "left_shoulder", "right_shoulder", "left_elbow", "right_elbow",
+        "left_wrist", "right_wrist", "left_hip", "right_hip",
+    )
+    conf_ok = all(float(kp(n)[2]) >= min_conf for n in required)
+    if not conf_ok:
+        return {"valid": False, "conf_ok": False, "arm_dev": float("inf"),
+                "spread": False, "upright": False}
+
+    shoulder_y = (float(kp("left_shoulder")[1]) + float(kp("right_shoulder")[1])) / 2
+    hip_y = (float(kp("left_hip")[1]) + float(kp("right_hip")[1])) / 2
+    torso = abs(hip_y - shoulder_y)
+    if torso < 1.0:
+        return {"valid": False, "conf_ok": True, "arm_dev": float("inf"),
+                "spread": False, "upright": False}
+
+    arm_dev = max(
+        abs(float(kp(n)[1]) - shoulder_y)
+        for n in ("left_elbow", "right_elbow", "left_wrist", "right_wrist")
+    ) / torso
+    wrist_span = abs(float(kp("left_wrist")[0]) - float(kp("right_wrist")[0]))
+    shoulder_span = abs(
+        float(kp("left_shoulder")[0]) - float(kp("right_shoulder")[0])
+    )
+    spread = wrist_span > 2.0 * shoulder_span
+    upright = hip_y > shoulder_y
+
+    return {
+        "valid": arm_dev <= arm_tolerance and spread and upright,
+        "conf_ok": True,
+        "arm_dev": float(arm_dev),
+        "spread": bool(spread),
+        "upright": bool(upright),
+    }
+
+
 # ── Generator ────────────────────────────────────────────────────────────────
 
 class TPoseReferenceGenerator:
@@ -152,15 +208,13 @@ class TPoseReferenceGenerator:
         self._device = "cuda" if torch.cuda.is_available() else "cpu"
 
     # ── identity extraction ──────────────────────────────────────────────
-    def _get_face_app(self):
+    def _get_extractor(self):
         if self._face_app is None:
-            from insightface.app import FaceAnalysis
-
-            self._face_app = FaceAnalysis(
-                name="buffalo_l",
-                providers=["CUDAExecutionProvider", "CPUExecutionProvider"],
+            from avatar_pipeline.preprocess.face_identity import (
+                FaceIdentityExtractor,
             )
-            self._face_app.prepare(ctx_id=0, det_size=(640, 640))
+
+            self._face_app = FaceIdentityExtractor()
         return self._face_app
 
     def extract_face_identity(
@@ -172,65 +226,21 @@ class TPoseReferenceGenerator:
         straight through, aligned crop included); the crop is therefore kept
         in BGR exactly as the official demo passes it to generate().
         Fails loudly when no face is detected — no fallback identity.
-
-        Mirrors FaceAnalysis.get(), but sweeps the SCRFD detect size and
-        image rotation:
-          - get() freezes the 640 canvas, and faces that fill the frame
-            (tight face crops) exceed its anchor scales after resize — they
-            only detect at smaller input sizes. detect(input_size=...) is
-            the upstream-supported per-call override.
-          - candid photos are frequently rotated 90/180/270 deg (EXIF
-            stripped); SCRFD does not detect sideways faces, so each
-            rotation is tried and the upright orientation is used for the
-            landmarks, embedding, and aligned crop.
         """
-        from insightface.app.common import Face
         from insightface.utils import face_align
 
-        bgr = np.ascontiguousarray(image_rgb[:, :, ::-1])
-        app = self._get_face_app()
-        bboxes = kpss = None
-        found = False
-        for quarter_turns in (0, 1, 2, 3):
-            candidate = np.ascontiguousarray(np.rot90(bgr, k=quarter_turns))
-            for det_size in (640, 320, 160):
-                bboxes, kpss = app.det_model.detect(
-                    candidate,
-                    input_size=(det_size, det_size),
-                    max_num=0,
-                    metric="default",
-                )
-                if bboxes.shape[0]:
-                    found = True
-                    break
-            if found:
-                if quarter_turns:
-                    print(
-                        f"  face found after rotating the input "
-                        f"{quarter_turns * 90} deg counter-clockwise"
-                    )
-                bgr = candidate
-                break
-        if not found:
+        hit = self._get_extractor().detect(image_rgb)
+        if hit is None:
             raise RuntimeError(
                 "insightface found no face in the candid input (tried all "
                 "four rotations); cannot build a T-pose reference without "
                 "a face identity"
             )
-        # Candid photos may contain bystanders: take the largest face.
-        areas = (bboxes[:, 2] - bboxes[:, 0]) * (bboxes[:, 3] - bboxes[:, 1])
-        i = int(np.argmax(areas))
-        face = Face(
-            bbox=bboxes[i, 0:4],
-            kps=kpss[i] if kpss is not None else None,
-            det_score=bboxes[i, 4],
-        )
-        for taskname, model in app.models.items():
-            if taskname == "detection":
-                continue
-            model.get(bgr, face)
+        face, upright_bgr = hit
         faceid_embeds = torch.from_numpy(face.normed_embedding).unsqueeze(0)
-        face_image = face_align.norm_crop(bgr, landmark=face.kps, image_size=224)
+        face_image = face_align.norm_crop(
+            upright_bgr, landmark=face.kps, image_size=224
+        )
         return faceid_embeds, face_image
 
     # ── model loading ────────────────────────────────────────────────────
@@ -286,14 +296,15 @@ class TPoseReferenceGenerator:
         )
 
     # ── generation ───────────────────────────────────────────────────────
-    def generate(self, input_image: str, out_path: Path) -> Path:
+    def generate_one(
+        self,
+        faceid_embeds: torch.Tensor,
+        face_image: np.ndarray,
+        pose_image: Image.Image,
+        seed: int,
+    ) -> Image.Image:
         if self._ip_model is None:
             self.load_pretrained()
-
-        image = np.array(Image.open(input_image).convert("RGB"), dtype=np.uint8)
-        faceid_embeds, face_image = self.extract_face_identity(image)
-        pose_image = render_tpose_skeleton(self.width, self.height)
-
         images = self._ip_model.generate(
             prompt=self.prompt,
             negative_prompt=self.negative_prompt,
@@ -305,13 +316,20 @@ class TPoseReferenceGenerator:
             width=self.width,
             height=self.height,
             num_inference_steps=self.num_inference_steps,
-            seed=self.seed,
+            seed=seed,
             image=pose_image,  # ControlNet conditioning, forwarded via kwargs
         )
+        return images[0]
 
+    def generate(self, input_image: str, out_path: Path) -> Path:
+        """Single-shot generation at the configured seed (no gate)."""
+        image = np.array(Image.open(input_image).convert("RGB"), dtype=np.uint8)
+        faceid_embeds, face_image = self.extract_face_identity(image)
+        pose_image = render_tpose_skeleton(self.width, self.height)
+        result = self.generate_one(faceid_embeds, face_image, pose_image, self.seed)
         out_path = Path(out_path)
         out_path.parent.mkdir(parents=True, exist_ok=True)
-        images[0].save(out_path)
+        result.save(out_path)
         return out_path
 
     def unload(self) -> None:
@@ -323,11 +341,99 @@ class TPoseReferenceGenerator:
 
 
 def build_tpose_reference(
-    input_image: str, out_path: Path, seed: int = 2023
+    input_image: str,
+    out_path: Path,
+    seed: int = 2023,
+    num_candidates: int = 4,
+    min_identity: float = 0.15,
 ) -> Path:
-    """One-shot helper: generate the reference, then free everything."""
+    """Gated best-of-N reference synthesis.
+
+    Generates *num_candidates* references at sequential seeds, scores each
+    for strict-T-pose validity (Sapiens pose keypoints — a failed ControlNet
+    pose surfaces here in seconds, not 40 minutes into the pipeline) and
+    FaceID similarity to the candid input, then keeps the highest-identity
+    pose-valid candidate. Fails loudly with the full score table when no
+    candidate passes. All candidates are kept next to *out_path* for
+    inspection.
+    """
+    out_path = Path(out_path)
+    cand_dir = out_path.parent / "tpose_candidates"
+    cand_dir.mkdir(parents=True, exist_ok=True)
+
     generator = TPoseReferenceGenerator(seed=seed)
     try:
-        return generator.generate(input_image, out_path)
+        image = np.array(Image.open(input_image).convert("RGB"), dtype=np.uint8)
+        faceid_embeds, face_image = generator.extract_face_identity(image)
+        candid_embed = faceid_embeds[0].cpu().numpy()
+        pose_image = render_tpose_skeleton(generator.width, generator.height)
+
+        candidates: list[tuple[int, Image.Image, Path]] = []
+        for i in range(num_candidates):
+            cand_seed = seed + i
+            img = generator.generate_one(
+                faceid_embeds, face_image, pose_image, cand_seed
+            )
+            path = cand_dir / f"seed_{cand_seed}.png"
+            img.save(path)
+            candidates.append((cand_seed, img, path))
+
+        # Identity scores while insightface is still loaded.
+        from avatar_pipeline.preprocess.face_identity import cosine_similarity
+
+        extractor = generator._get_extractor()
+        id_scores: list[float | None] = []
+        for _, img, _ in candidates:
+            emb = extractor.embed(np.asarray(img))
+            id_scores.append(
+                None if emb is None else cosine_similarity(candid_embed, emb)
+            )
     finally:
         generator.unload()
+
+    # Pose gate after the SD stack is freed (Sapiens 1b needs the VRAM).
+    from avatar_pipeline.sapiens.pose_estimation import PoseEstimator
+
+    pose_estimator = PoseEstimator()
+    pose_scores = []
+    for _, img, _ in candidates:
+        pose_data = pose_estimator.estimate(np.asarray(img, dtype=np.uint8))
+        pose_scores.append(
+            tpose_pose_score(pose_data.keypoints, list(pose_data.joint_names))
+        )
+    del pose_estimator
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+    rows = []
+    best = None  # (identity, index)
+    for i, ((cand_seed, _, path), id_score, ps) in enumerate(
+        zip(candidates, id_scores, pose_scores)
+    ):
+        ok = ps["valid"] and id_score is not None and id_score >= min_identity
+        rows.append(
+            f"  seed {cand_seed}: pose_valid={ps['valid']} "
+            f"arm_dev={ps['arm_dev']:.3f} identity="
+            f"{'n/a' if id_score is None else f'{id_score:.3f}'}"
+            f"{'  <- candidate' if ok else ''}"
+        )
+        if ok and (best is None or id_score > best[0]):
+            best = (id_score, i)
+    print("[tpose-gate] candidate scores:")
+    for row in rows:
+        print(row)
+    if best is None:
+        raise RuntimeError(
+            "No T-pose reference candidate passed the gate "
+            f"(pose-valid + identity >= {min_identity}):\n" + "\n".join(rows)
+        )
+
+    _, idx = best
+    win_seed, win_img, _ = candidates[idx]
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    win_img.save(out_path)
+    print(
+        f"[tpose-gate] selected seed {win_seed} "
+        f"(identity {best[0]:.3f}, arm_dev {pose_scores[idx]['arm_dev']:.3f})"
+    )
+    return out_path
