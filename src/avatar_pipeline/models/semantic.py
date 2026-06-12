@@ -3,13 +3,6 @@ import numpy as np
 
 
 @dataclass
-class SemanticVertexData:
-    semantic_region: str
-    confidence: float
-    source_system: str
-
-
-@dataclass
 class SemanticMap:
     labels: np.ndarray
     confidence: np.ndarray

@@ -429,17 +429,6 @@ class TPoseReferenceGenerator:
         )
         return images[0]
 
-    def generate(self, input_image: str, out_path: Path) -> Path:
-        """Single-shot generation at the configured seed (no gate)."""
-        image = np.array(Image.open(input_image).convert("RGB"), dtype=np.uint8)
-        faceid_embeds, face_image = self.extract_face_identity(image)
-        pose_image = render_tpose_skeleton(self.width, self.height)
-        result = self.generate_one(faceid_embeds, face_image, pose_image, self.seed)
-        out_path = Path(out_path)
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        result.save(out_path)
-        return out_path
-
     def unload(self) -> None:
         """Release GPU memory before the main pipeline loads its models."""
         self._ip_model = None

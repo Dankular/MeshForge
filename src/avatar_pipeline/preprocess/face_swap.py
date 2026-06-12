@@ -20,9 +20,6 @@ import numpy as np
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 
-HYPERSWAP_PATH = _REPO_ROOT / "checkpoints" / "face_enhance" / "hyperswap_1a_256.onnx"
-GFPGAN_PATH = _REPO_ROOT / "checkpoints" / "face_enhance" / "GFPGANv1.4.pth"
-
 # ArcFace 112 5-point template scaled to the 256px swap input (app.py).
 ARCFACE_256 = (
     np.array(

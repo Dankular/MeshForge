@@ -179,7 +179,6 @@ class AvatarPipeline:
         self.exporter   = GLBExporter()
         self._offload   = None  # mmgp offload domain — set in _setup_offload()
         self._managed_modules: dict[str, torch.nn.Module] = {}
-        self._offload_report = None
         self._load_checkpoints(Path(self.config.checkpoint_root))
 
     def _load_checkpoints(self, root: Path) -> None:
@@ -242,7 +241,7 @@ class AvatarPipeline:
             f"[mmgp] wrapping {len(modules)} models in one shared offload domain: "
             f"{sorted(modules)}"
         )
-        self._offload, self._offload_report = create_shared_profile(modules)
+        self._offload, _ = create_shared_profile(modules)
         self._managed_modules = modules
 
     def _collect_heavy_modules(self) -> dict[str, torch.nn.Module]:
@@ -796,7 +795,7 @@ class AvatarPipeline:
             # 1. Preprocess
             print("[1/8] Preprocessing ...")
             image     = np.array(Image.open(input_image).convert("RGB"), dtype=np.uint8)
-            processed = self.preprocess.process_rmbg2(image)
+            processed = self.preprocess.process(image)
             alpha     = np.clip(processed[:, :, 3:4], 0.0, 1.0)
             fg_rgb    = np.clip(processed[:, :, :3] * alpha + (1.0 - alpha) * 0.5, 0.0, 1.0)
             cond_img  = np.clip(fg_rgb * 255.0, 0, 255).astype(np.uint8)

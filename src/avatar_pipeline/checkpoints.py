@@ -18,11 +18,6 @@ class CheckpointSpec:
 
 CHECKPOINTS: tuple[CheckpointSpec, ...] = (
     CheckpointSpec(
-        name="triposr_model",
-        url="https://huggingface.co/stabilityai/TripoSR/resolve/main/model.ckpt",
-        relative_path="triposr/model.ckpt",
-    ),
-    CheckpointSpec(
         name="pshuman_unet",
         url="https://huggingface.co/pengHTYX/PSHuman_Unclip_768_6views/resolve/main/unet/diffusion_pytorch_model.safetensors",
         relative_path="pshuman/unet/diffusion_pytorch_model.safetensors",
@@ -77,7 +72,6 @@ CHECKPOINTS: tuple[CheckpointSpec, ...] = (
 
 def resolve_dynamic_checkpoint_urls() -> dict[str, str]:
     mapping: dict[str, tuple[str, str]] = {
-        "triposr_model": ("stabilityai/TripoSR", "model.ckpt"),
         "pshuman_unet": (
             "pengHTYX/PSHuman_Unclip_768_6views",
             "unet/diffusion_pytorch_model.safetensors",

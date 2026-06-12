@@ -28,10 +28,9 @@ class PoseEstimator:
     Returns a PoseData with keypoints (x, y, confidence) in image pixel coords.
     """
 
-    def __init__(self, n_kpts: int = 17) -> None:
+    def __init__(self) -> None:
         self._model: torch.jit.ScriptModule | None = None
         self._device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.n_kpts = n_kpts
 
     def load_pretrained(self, checkpoint_path=None) -> None:
         self._model = load_model("pose")

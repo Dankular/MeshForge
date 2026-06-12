@@ -60,7 +60,6 @@ class MVAdapterTextureBaker:
         self._ctx = None
         self._texture_pipe = None
         self._device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.last_uv_coverage = 0.0
 
     def load_pretrained(self) -> None:
         from inference_ig2mv_sdxl import prepare_pipeline

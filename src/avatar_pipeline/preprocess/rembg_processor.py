@@ -22,9 +22,6 @@ class RembgProcessor:
             self._session = new_session(self.model_name)
         return self._session
 
-    def process_rmbg2(self, image: np.ndarray) -> np.ndarray:
-        return self.process(image)
-
     def process(self, image: np.ndarray) -> np.ndarray:
         """Remove background from a uint8 RGB image.
 
