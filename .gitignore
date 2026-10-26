@@ -8,3 +8,7 @@ debug/
 external/
 outputs_old*/
 gfpgan/
+
+.env
+.env.*
+!.env.example
